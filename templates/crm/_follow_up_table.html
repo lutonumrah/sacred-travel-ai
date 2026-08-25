@@ -1,0 +1,26 @@
+<div class="table-wrap">
+  <table class="data">
+    <thead><tr><th>Task</th><th>Lead</th><th>Assigned</th><th>Due</th><th></th></tr></thead>
+    <tbody>
+      {% for task in tasks %}
+        <tr>
+          <td><strong>{{ task.title }}</strong>{% if task.notes %}<div class="muted small">{{ task.notes }}</div>{% endif %}</td>
+          <td><a href="{% url 'crm:lead_detail' task.lead_id %}">{{ task.lead.title }}</a></td>
+          <td class="small">{{ task.assigned_to.get_username|default:"Unassigned" }}</td>
+          <td class="small nowrap">{{ task.due_at|date:"d M Y H:i" }}</td>
+          <td class="actions">
+            {% if not task.is_completed %}
+              <form method="post" action="{% url 'crm:follow_up_complete' task.pk %}" class="inline-form">
+                {% csrf_token %}
+                <input type="hidden" name="next" value="{{ request.get_full_path }}">
+                <button class="btn small secondary" type="submit">Done</button>
+              </form>
+            {% else %}<span class="badge ok">Completed</span>{% endif %}
+          </td>
+        </tr>
+      {% empty %}
+        <tr><td colspan="5">{% include "partials/_empty.html" with title=empty_title hint="" %}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>

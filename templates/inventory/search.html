@@ -1,0 +1,33 @@
+{% extends "layouts/base.html" %}
+
+{% block content %}
+  <form method="get" class="filter-bar">
+    {% for field in form %}{% include "partials/_field.html" with field=field %}{% endfor %}
+    <div class="form-row filter-actions">
+      <button class="btn" type="submit">Search</button>
+      <a class="btn ghost" href="{% url 'inventory:search' %}">Reset</a>
+    </div>
+  </form>
+
+  <div class="panel">
+    <div class="panel-head">
+      <h2>{{ results|length }} result{{ results|length|pluralize }}</h2>
+      <span class="muted small">This is the same search the AI chat engine runs when it recommends inventory.</span>
+    </div>
+    {% if results %}
+      <div class="card-list">
+        {% for item in results %}
+          <div class="card">
+            <span class="badge grey">{{ item.inventory_type }}</span>
+            <strong>{{ item.name }}</strong>
+            <span class="muted small">{{ item.destination|default:"No destination" }} · {{ item.detail }}</span>
+            <span class="price">{{ item.currency }} {{ item.price|floatformat:0 }} <span class="muted small">{{ item.price_label }}</span></span>
+            {% if item.priority %}<span class="muted small">Priority {{ item.priority }}</span>{% endif %}
+          </div>
+        {% endfor %}
+      </div>
+    {% else %}
+      {% include "partials/_empty.html" with title="No matches" hint="Try a broader keyword, or clear the price range." %}
+    {% endif %}
+  </div>
+{% endblock %}

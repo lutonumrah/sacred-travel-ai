@@ -1,0 +1,45 @@
+{% extends "layouts/base.html" %}
+
+{% block page_actions %}<a class="btn ghost" href="{% url 'bookings:list' %}">Bookings</a>{% endblock %}
+
+{% block content %}
+  <div class="kpi-grid">
+    <div class="kpi ok">
+      <div class="kpi-label">Settled revenue</div>
+      <div class="kpi-value">₹{{ revenue|floatformat:0 }}</div>
+      <div class="kpi-hint">All successful payments</div>
+    </div>
+    <div class="kpi {% if is_live_gateway %}accent{% else %}warn{% endif %}">
+      <div class="kpi-label">Gateway</div>
+      <div class="kpi-value">{% if is_live_gateway %}Live{% else %}Simulation{% endif %}</div>
+      <div class="kpi-hint">{% if is_live_gateway %}Razorpay keys configured{% else %}Set RAZORPAY_KEY_ID to go live{% endif %}</div>
+    </div>
+  </div>
+
+  {% include "partials/_filters.html" %}
+
+  <div class="panel">
+    <div class="table-wrap">
+      <table class="data">
+        <thead><tr><th>Booking</th><th>Order ID</th><th>Payment ID</th><th class="right">Amount</th><th>Status</th><th>Method</th><th>Paid</th></tr></thead>
+        <tbody>
+          {% for payment in page_obj %}
+            <tr>
+              <td><a href="{% url 'bookings:detail' payment.booking_id %}">{{ payment.booking.booking_number }}</a>
+                <div class="muted small">{{ payment.booking.customer.full_name }}</div></td>
+              <td class="mono small">{{ payment.razorpay_order_id|default:"—" }}</td>
+              <td class="mono small">{{ payment.razorpay_payment_id|default:"—" }}</td>
+              <td class="right">{{ payment.currency }} {{ payment.amount|floatformat:2 }}</td>
+              <td><span class="badge status-{{ payment.status }}">{{ payment.get_status_display }}</span></td>
+              <td class="small">{{ payment.method|default:"—" }}</td>
+              <td class="small nowrap">{{ payment.paid_at|date:"d M Y H:i"|default:"—" }}</td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="7">{% include "partials/_empty.html" with title="No payments yet" %}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% include "partials/_pagination.html" %}
+  </div>
+{% endblock %}

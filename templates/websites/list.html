@@ -1,0 +1,36 @@
+{% extends "layouts/base.html" %}
+
+{% block page_actions %}<a class="btn" href="{% url 'websites:create' %}">Add website</a>{% endblock %}
+
+{% block content %}
+  {% include "partials/_filters.html" %}
+  <div class="panel">
+    <div class="panel-head"><h2>{{ total }} website{{ total|pluralize }}</h2></div>
+    <div class="table-wrap">
+      <table class="data">
+        <thead>
+          <tr><th>Website</th><th>Domain</th><th>Source ID</th><th>Widget</th><th class="right">Leads</th><th class="right">Chats</th><th class="right">Bookings</th><th>Status</th><th></th></tr>
+        </thead>
+        <tbody>
+          {% for website in page_obj %}
+            <tr>
+              <td><strong><a href="{% url 'websites:detail' website.pk %}">{{ website.name }}</a></strong>
+                {% if website.brand_name %}<div class="muted small">{{ website.brand_name }}</div>{% endif %}</td>
+              <td class="mono">{{ website.domain }}</td>
+              <td class="mono">{{ website.source_identifier }}</td>
+              <td>{% if website.widget_enabled %}<span class="badge ok">On</span>{% else %}<span class="badge grey">Off</span>{% endif %}</td>
+              <td class="right">{{ website.lead_count }}</td>
+              <td class="right">{{ website.conversation_count }}</td>
+              <td class="right">{{ website.booking_count }}</td>
+              <td>{% if website.is_active %}<span class="badge ok">Active</span>{% else %}<span class="badge danger">Inactive</span>{% endif %}</td>
+              <td class="actions"><a class="btn small ghost" href="{% url 'websites:edit' website.pk %}">Edit</a></td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="9">{% include "partials/_empty.html" with title="No websites registered" hint="Register a website to start tagging leads and issuing chat-widget keys." %}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% include "partials/_pagination.html" %}
+  </div>
+{% endblock %}

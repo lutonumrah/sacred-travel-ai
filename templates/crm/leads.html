@@ -1,0 +1,38 @@
+{% extends "layouts/base.html" %}
+
+{% block page_actions %}
+  <a class="btn ghost" href="{% url 'crm:pipeline' %}">Pipeline view</a>
+  <a class="btn ghost" href="{% url 'dashboard:report_export' 'leads' %}">Export CSV</a>
+  <a class="btn" href="{% url 'crm:lead_create' %}">Add lead</a>
+{% endblock %}
+
+{% block content %}
+  {% include "partials/_filters.html" %}
+  <div class="panel">
+    <div class="panel-head"><h2>{{ total }} lead{{ total|pluralize }}</h2></div>
+    <div class="table-wrap">
+      <table class="data">
+        <thead><tr><th>Lead</th><th>Customer</th><th>Status</th><th>Source</th><th>Destination</th><th>Travel</th><th>Assigned</th><th class="right">Score</th><th>Created</th></tr></thead>
+        <tbody>
+          {% for lead in page_obj %}
+            <tr>
+              <td><strong><a href="{% url 'crm:lead_detail' lead.pk %}">{{ lead.title }}</a></strong>
+                {% if lead.website %}<div class="muted small">{{ lead.website.source_identifier }}</div>{% endif %}</td>
+              <td>{% if lead.customer %}<a href="{% url 'crm:customer_detail' lead.customer.pk %}">{{ lead.customer.full_name }}</a>{% else %}<span class="muted">—</span>{% endif %}</td>
+              <td><span class="badge status-{{ lead.status }}">{{ lead.get_status_display }}</span></td>
+              <td class="small">{{ lead.get_source_display }}</td>
+              <td>{{ lead.destination|default:"—" }}</td>
+              <td class="small nowrap">{{ lead.travel_start|date:"d M"|default:"—" }}{% if lead.travel_end %} → {{ lead.travel_end|date:"d M" }}{% endif %}</td>
+              <td class="small">{{ lead.assigned_to.get_username|default:"Unassigned" }}</td>
+              <td class="right">{{ lead.score }}</td>
+              <td class="small nowrap">{{ lead.created_at|date:"d M Y" }}</td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="9">{% include "partials/_empty.html" with title="No leads match" hint="Leads arrive from AI chats automatically, or you can add one manually." %}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% include "partials/_pagination.html" %}
+  </div>
+{% endblock %}

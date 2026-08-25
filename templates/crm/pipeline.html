@@ -1,0 +1,30 @@
+{% extends "layouts/base.html" %}
+
+{% block page_actions %}
+  <a class="btn ghost" href="{% url 'crm:leads' %}">Table view</a>
+  <a class="btn" href="{% url 'crm:lead_create' %}">Add lead</a>
+{% endblock %}
+
+{% block content %}
+  <div class="kanban">
+    {% for column in columns %}
+      <div class="kanban-col">
+        <h3>{{ column.label }} <span class="badge status-{{ column.status }}">{{ column.count }}</span></h3>
+        {% for lead in column.leads|slice:":25" %}
+          <div class="kanban-card">
+            <span class="score">{{ lead.score }}</span>
+            <strong><a href="{% url 'crm:lead_detail' lead.pk %}">{{ lead.title }}</a></strong>
+            <div class="meta">
+              {% if lead.customer %}{{ lead.customer.full_name }}{% else %}No customer{% endif %}
+              {% if lead.destination %} · {{ lead.destination }}{% endif %}
+            </div>
+            <div class="meta">{{ lead.assigned_to.get_username|default:"Unassigned" }} · {{ lead.created_at|date:"d M" }}</div>
+          </div>
+        {% empty %}
+          <p class="muted small">Empty</p>
+        {% endfor %}
+        {% if column.count > 25 %}<p class="muted small">+{{ column.count|add:"-25" }} more</p>{% endif %}
+      </div>
+    {% endfor %}
+  </div>
+{% endblock %}

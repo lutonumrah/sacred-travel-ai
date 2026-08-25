@@ -1,0 +1,74 @@
+{% extends "layouts/base.html" %}
+
+{% block content %}
+  <div class="panel">
+    <div class="panel-head">
+      <h2>How visibility works</h2>
+    </div>
+    <p class="muted small">
+      Inventory is visible on every website by default. A rule with <strong>Visible</strong> unticked
+      removes that item from that one website; a rule with <strong>Visible</strong> ticked and a higher
+      priority pushes it to the top of that website's search and AI recommendations.
+    </p>
+  </div>
+
+  <form method="get" class="filter-bar">
+    <div class="form-row">
+      <label for="website">Website</label>
+      <select class="input" name="website" id="website">
+        <option value="">All websites</option>
+        {% for site in websites %}
+          <option value="{{ site.pk }}" {% if selected_website and selected_website.pk == site.pk %}selected{% endif %}>{{ site.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="form-row">
+      <label for="inventory_type">Type</label>
+      <select class="input" name="inventory_type" id="inventory_type">
+        <option value="">All types</option>
+        {% for value, label in inventory_types %}
+          <option value="{{ value }}" {% if request.GET.inventory_type == value %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="form-row filter-actions">
+      <button class="btn" type="submit">Filter</button>
+      <a class="btn ghost" href="{% url 'inventory:visibility' %}">Reset</a>
+    </div>
+  </form>
+
+  <div class="split">
+    <div class="panel">
+      <div class="panel-head"><h2>Rules</h2></div>
+      <div class="table-wrap">
+        <table class="data">
+          <thead><tr><th>Website</th><th>Type</th><th>Item</th><th>Visible</th><th class="right">Priority</th></tr></thead>
+          <tbody>
+            {% for entry in rows %}
+              <tr>
+                <td>{{ entry.row.website.name }}</td>
+                <td><span class="badge grey">{{ entry.row.get_inventory_type_display }}</span></td>
+                <td>{% if entry.object %}{{ entry.object.name }}{% else %}<span class="muted">#{{ entry.row.object_id }} (deleted)</span>{% endif %}</td>
+                <td>{% if entry.row.is_visible %}<span class="badge ok">Visible</span>{% else %}<span class="badge danger">Hidden</span>{% endif %}</td>
+                <td class="right">{{ entry.row.priority }}</td>
+              </tr>
+            {% empty %}
+              <tr><td colspan="5">{% include "partials/_empty.html" with title="No overrides" hint="With no rules, every active item shows on every website." %}</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    {% if can_edit %}
+      <div class="panel">
+        <div class="panel-head"><h3>Add or update a rule</h3></div>
+        <form method="post" action="{% url 'inventory:visibility_save' %}">
+          {% csrf_token %}
+          {% include "partials/_form.html" with form=form %}
+          <div class="form-actions"><button class="btn" type="submit">Save rule</button></div>
+        </form>
+      </div>
+    {% endif %}
+  </div>
+{% endblock %}

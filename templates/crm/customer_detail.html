@@ -1,0 +1,86 @@
+{% extends "layouts/base.html" %}
+
+{% block page_actions %}
+  <a class="btn ghost" href="{% url 'crm:customer_edit' customer.pk %}">Edit</a>
+  <a class="btn" href="{% url 'crm:lead_create' %}?customer={{ customer.pk }}">New lead</a>
+{% endblock %}
+
+{% block content %}
+  <div class="split">
+    <div>
+      <div class="panel">
+        <div class="panel-head"><h2>Leads</h2></div>
+        <div class="table-wrap">
+          <table class="data">
+            <thead><tr><th>Lead</th><th>Status</th><th>Destination</th><th>Source</th><th class="right">Score</th><th>Created</th></tr></thead>
+            <tbody>
+              {% for lead in leads %}
+                <tr>
+                  <td><a href="{% url 'crm:lead_detail' lead.pk %}">{{ lead.title }}</a></td>
+                  <td><span class="badge status-{{ lead.status }}">{{ lead.get_status_display }}</span></td>
+                  <td>{{ lead.destination|default:"—" }}</td>
+                  <td class="small">{{ lead.get_source_display }}</td>
+                  <td class="right">{{ lead.score }}</td>
+                  <td class="small">{{ lead.created_at|date:"d M Y" }}</td>
+                </tr>
+              {% empty %}
+                <tr><td colspan="6">{% include "partials/_empty.html" with title="No leads yet" %}</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head"><h2>Bookings</h2></div>
+        <div class="table-wrap">
+          <table class="data">
+            <thead><tr><th>Number</th><th>Product</th><th class="right">Total</th><th>Status</th><th>Created</th></tr></thead>
+            <tbody>
+              {% for booking in bookings %}
+                <tr>
+                  <td><a href="{% url 'bookings:detail' booking.pk %}">{{ booking.booking_number }}</a></td>
+                  <td>{{ booking.product_name }}</td>
+                  <td class="right">{{ booking.currency }} {{ booking.total_amount|floatformat:2 }}</td>
+                  <td><span class="badge status-{{ booking.status }}">{{ booking.get_status_display }}</span></td>
+                  <td class="small">{{ booking.created_at|date:"d M Y" }}</td>
+                </tr>
+              {% empty %}
+                <tr><td colspan="5">{% include "partials/_empty.html" with title="No bookings yet" %}</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <div class="panel">
+        <div class="panel-head"><h3>Profile</h3></div>
+        <dl class="definition">
+          <dt>Email</dt><dd>{{ customer.email|default:"—" }}</dd>
+          <dt>Phone</dt><dd>{{ customer.phone|default:"—" }}</dd>
+          <dt>WhatsApp</dt><dd>{{ customer.whatsapp|default:"—" }}</dd>
+          <dt>City</dt><dd>{{ customer.city|default:"—" }}</dd>
+          <dt>Country</dt><dd>{{ customer.country|default:"—" }}</dd>
+          <dt>Language</dt><dd>{{ customer.preferred_language|default:"—" }}</dd>
+          <dt>Created</dt><dd>{{ customer.created_at|date:"d M Y" }}</dd>
+        </dl>
+        {% if customer.notes %}<p class="muted small" style="margin-top:1rem">{{ customer.notes }}</p>{% endif %}
+      </div>
+
+      <div class="panel">
+        <div class="panel-head"><h3>Conversations</h3></div>
+        {% for conversation in conversations %}
+          <div style="padding:.4rem 0;border-bottom:1px solid var(--line)">
+            <a href="{% url 'conversations:detail' conversation.pk %}">Chat {{ conversation.session_key|slice:":8" }}</a>
+            <span class="badge status-{{ conversation.status }}">{{ conversation.get_status_display }}</span>
+            <div class="muted small">{{ conversation.last_message_at|date:"d M Y H:i"|default:"no messages" }}</div>
+          </div>
+        {% empty %}
+          <p class="muted small">No chats linked to this customer.</p>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+{% endblock %}

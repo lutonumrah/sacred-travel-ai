@@ -1,0 +1,26 @@
+<div class="panel">
+  <div class="panel-head"><h2>{{ total }} conversation{{ total|pluralize }}</h2></div>
+  <div class="table-wrap">
+    <table class="data">
+      <thead><tr><th>Chat</th><th>Website</th><th>Customer</th><th>Status</th><th>Assigned</th><th class="right">Messages</th><th>Last activity</th><th></th></tr></thead>
+      <tbody>
+        {% for conversation in page_obj %}
+          <tr>
+            <td><strong><a href="{% url 'conversations:detail' conversation.pk %}">{{ conversation.session_key|slice:":10" }}</a></strong>
+              {% if conversation.lead_id %}<div class="muted small">Lead #{{ conversation.lead_id }}</div>{% endif %}</td>
+            <td class="mono small">{{ conversation.website.source_identifier|default:"—" }}</td>
+            <td>{% if conversation.customer %}<a href="{% url 'crm:customer_detail' conversation.customer.pk %}">{{ conversation.customer.full_name }}</a>{% else %}<span class="muted">Anonymous</span>{% endif %}</td>
+            <td><span class="badge status-{{ conversation.status }}">{{ conversation.get_status_display }}</span></td>
+            <td class="small">{{ conversation.assigned_to.get_username|default:"—" }}</td>
+            <td class="right">{{ conversation.message_count }}</td>
+            <td class="small nowrap">{{ conversation.last_message_at|date:"d M H:i"|default:"—" }}</td>
+            <td class="actions"><a class="btn small ghost" href="{% url 'conversations:detail' conversation.pk %}">Open</a></td>
+          </tr>
+        {% empty %}
+          <tr><td colspan="8">{% include "partials/_empty.html" with title="No conversations" hint="Chats appear here as soon as a visitor uses the widget on one of your websites." %}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% include "partials/_pagination.html" %}
+</div>

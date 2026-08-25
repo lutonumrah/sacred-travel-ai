@@ -1,0 +1,39 @@
+{% extends "layouts/base.html" %}
+
+{% block page_actions %}
+  {% if can_edit %}<a class="btn" href="{% url 'inventory:package_create' %}">Add package</a>{% endif %}
+{% endblock %}
+
+{% block content %}
+  {% include "partials/_filters.html" %}
+  <div class="panel">
+    <div class="panel-head"><h2>{{ total }} package{{ total|pluralize }}</h2></div>
+    <div class="table-wrap">
+      <table class="data">
+        <thead><tr><th>Package</th><th>Destination</th><th>Duration</th><th class="right">From</th><th>Status</th><th></th></tr></thead>
+        <tbody>
+          {% for package in page_obj %}
+            <tr>
+              <td><strong>{{ package.name }}</strong><div class="muted small">#{{ package.pk }}</div></td>
+              <td>{{ package.destination.name|default:"—" }}</td>
+              <td>{{ package.duration_days }}D / {{ package.duration_nights }}N</td>
+              <td class="right">{{ package.currency }} {{ package.base_price|floatformat:0 }}</td>
+              <td>{% if package.is_active %}<span class="badge ok">Active</span>{% else %}<span class="badge grey">Inactive</span>{% endif %}</td>
+              <td class="actions">
+                {% if can_edit %}
+                  <a class="btn small ghost" href="{% url 'inventory:package_edit' package.pk %}">Edit</a>
+                  <form method="post" action="{% url 'inventory:toggle' 'package' package.pk %}" class="inline-form">
+                    {% csrf_token %}<button class="btn small ghost" type="submit">{% if package.is_active %}Disable{% else %}Enable{% endif %}</button>
+                  </form>
+                {% endif %}
+              </td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="6">{% include "partials/_empty.html" with title="No packages match" %}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% include "partials/_pagination.html" %}
+  </div>
+{% endblock %}

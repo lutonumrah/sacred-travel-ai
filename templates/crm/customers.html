@@ -1,0 +1,31 @@
+{% extends "layouts/base.html" %}
+
+{% block page_actions %}<a class="btn" href="{% url 'crm:customer_create' %}">Add customer</a>{% endblock %}
+
+{% block content %}
+  {% include "partials/_filters.html" %}
+  <div class="panel">
+    <div class="panel-head"><h2>{{ total }} customer{{ total|pluralize }}</h2></div>
+    <div class="table-wrap">
+      <table class="data">
+        <thead><tr><th>Customer</th><th>Email</th><th>Phone</th><th>City</th><th class="right">Leads</th><th>Created</th><th></th></tr></thead>
+        <tbody>
+          {% for customer in page_obj %}
+            <tr>
+              <td><strong><a href="{% url 'crm:customer_detail' customer.pk %}">{{ customer.full_name }}</a></strong></td>
+              <td>{{ customer.email|default:"—" }}</td>
+              <td>{{ customer.phone|default:"—" }}</td>
+              <td>{{ customer.city|default:"—" }}</td>
+              <td class="right">{{ customer.lead_count }}</td>
+              <td class="small">{{ customer.created_at|date:"d M Y" }}</td>
+              <td class="actions"><a class="btn small ghost" href="{% url 'crm:customer_edit' customer.pk %}">Edit</a></td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="7">{% include "partials/_empty.html" with title="No customers yet" hint="Customers are created here, or automatically when a chat captures contact details." %}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% include "partials/_pagination.html" %}
+  </div>
+{% endblock %}

@@ -1,0 +1,90 @@
+{% extends "layouts/base.html" %}
+
+{% block page_actions %}
+  <a class="btn ghost" href="{% url 'websites:list' %}">All websites</a>
+  <a class="btn" href="{% url 'websites:edit' website.pk %}">Edit</a>
+{% endblock %}
+
+{% block content %}
+  <div class="kpi-grid">
+    <div class="kpi accent"><div class="kpi-label">Leads</div><div class="kpi-value">{{ lead_count }}</div></div>
+    <div class="kpi"><div class="kpi-label">Conversations</div><div class="kpi-value">{{ conversation_count }}</div></div>
+    <div class="kpi ok"><div class="kpi-label">Bookings</div><div class="kpi-value">{{ booking_count }}</div></div>
+    <div class="kpi"><div class="kpi-label">Widget</div>
+      <div class="kpi-value">{% if website.widget_enabled and website.is_active %}On{% else %}Off{% endif %}</div>
+      <div class="kpi-hint">{{ website.domain }}</div>
+    </div>
+  </div>
+
+  <div class="split">
+    <div>
+      <div class="panel">
+        <div class="panel-head"><h2>Embed the chat widget</h2></div>
+        <p class="muted small">Paste this before <code>&lt;/body&gt;</code> on {{ website.domain }}. Every chat it starts is tagged with the source <span class="mono">{{ website.source_identifier }}</span>.</p>
+        <div class="code-block">{{ embed_snippet }}</div>
+        <div class="form-actions">
+          <a class="btn secondary" href="{% url 'conversations:widget_preview' %}?website={{ website.pk }}">Preview the widget</a>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <h2>API keys</h2>
+          <form method="post" action="{% url 'websites:key_create' website.pk %}" class="inline-form">
+            {% csrf_token %}
+            <input type="hidden" name="key_name" value="Widget key">
+            <button class="btn small" type="submit">Issue new key</button>
+          </form>
+        </div>
+        <div class="table-wrap">
+          <table class="data">
+            <thead><tr><th>Name</th><th>Public key</th><th>Last used</th><th>Status</th><th></th></tr></thead>
+            <tbody>
+              {% for key in api_keys %}
+                <tr>
+                  <td>{{ key.key_name }}</td>
+                  <td class="mono small">{{ key.public_key }}</td>
+                  <td class="small">{{ key.last_used_at|date:"d M Y H:i"|default:"never" }}</td>
+                  <td>{% if key.is_active %}<span class="badge ok">Active</span>{% else %}<span class="badge grey">Revoked</span>{% endif %}</td>
+                  <td class="actions">
+                    {% if key.is_active %}
+                      <form method="post" action="{% url 'websites:key_revoke' website.pk key.pk %}" class="inline-form">
+                        {% csrf_token %}
+                        <button class="btn small danger" type="submit">Revoke</button>
+                      </form>
+                    {% endif %}
+                  </td>
+                </tr>
+              {% empty %}
+                <tr><td colspan="5">{% include "partials/_empty.html" with title="No keys issued" hint="Issue a key to enable the chat widget on this site." %}</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <div class="panel">
+        <div class="panel-head"><h3>Details</h3></div>
+        <dl class="definition">
+          <dt>Brand</dt><dd>{{ website.brand_name|default:"—" }}</dd>
+          <dt>Domain</dt><dd class="mono">{{ website.domain }}</dd>
+          <dt>Source ID</dt><dd class="mono">{{ website.source_identifier }}</dd>
+          <dt>Colour</dt><dd><span class="badge" style="background:{{ website.primary_color }};color:#fff">{{ website.primary_color }}</span></dd>
+          <dt>Created</dt><dd>{{ website.created_at|date:"d M Y" }}</dd>
+        </dl>
+        {% if website.notes %}<p class="muted small" style="margin-top:1rem">{{ website.notes }}</p>{% endif %}
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h3>Danger zone</h3></div>
+        <p class="muted small">Archiving hides the website everywhere but keeps its leads, chats and bookings intact.</p>
+        <form method="post" action="{% url 'websites:delete' website.pk %}"
+              onsubmit="return confirm('Archive {{ website.name }}?')">
+          {% csrf_token %}
+          <button class="btn danger small" type="submit">Archive website</button>
+        </form>
+      </div>
+    </div>
+  </div>
+{% endblock %}

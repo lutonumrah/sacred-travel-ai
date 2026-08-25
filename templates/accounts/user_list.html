@@ -1,0 +1,41 @@
+{% extends "layouts/base.html" %}
+
+{% block page_actions %}
+  <a class="btn ghost" href="{% url 'accounts:teams' %}">Teams</a>
+  <a class="btn ghost" href="{% url 'accounts:audit_log' %}">Audit log</a>
+  <a class="btn" href="{% url 'accounts:user_create' %}">Add user</a>
+{% endblock %}
+
+{% block content %}
+  {% include "partials/_filters.html" %}
+  <div class="panel">
+    <div class="panel-head"><h2>{{ total }} user{{ total|pluralize }}</h2></div>
+    <div class="table-wrap">
+      <table class="data">
+        <thead>
+          <tr><th>User</th><th>Role</th><th>Email</th><th>Phone</th><th>Status</th><th>Teams</th><th></th></tr>
+        </thead>
+        <tbody>
+          {% for item in page_obj %}
+            <tr>
+              <td><strong>{{ item.get_full_name|default:item.username }}</strong><div class="muted small">{{ item.username }}</div></td>
+              <td><span class="badge">{{ item.get_role_display }}</span></td>
+              <td>{{ item.email|default:"—" }}</td>
+              <td>{{ item.phone|default:"—" }}</td>
+              <td>
+                {% if item.is_active and item.is_active_employee %}
+                  <span class="badge ok">Active</span>
+                {% else %}<span class="badge danger">Inactive</span>{% endif %}
+              </td>
+              <td class="small">{% for team in item.teams.all %}{{ team.name }}{% if not forloop.last %}, {% endif %}{% empty %}—{% endfor %}</td>
+              <td class="actions"><a class="btn small ghost" href="{% url 'accounts:user_edit' item.pk %}">Edit</a></td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="7">{% include "partials/_empty.html" with title="No users match those filters" hint="Adjust the filters, or add your first user." %}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% include "partials/_pagination.html" %}
+  </div>
+{% endblock %}

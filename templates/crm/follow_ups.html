@@ -1,0 +1,44 @@
+{% extends "layouts/base.html" %}
+
+{% block page_actions %}
+  {% if include_completed %}
+    <a class="btn ghost" href="{% url 'crm:follow_ups' %}">Hide completed</a>
+  {% else %}
+    <a class="btn ghost" href="?completed=1">Show completed</a>
+  {% endif %}
+{% endblock %}
+
+{% block content %}
+  <div class="split">
+    <div>
+      <div class="panel">
+        <div class="panel-head"><h2>Overdue</h2><span class="badge danger">{{ buckets.overdue|length }}</span></div>
+        {% include "crm/_follow_up_table.html" with tasks=buckets.overdue empty_title="Nothing overdue" %}
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h2>Due today</h2><span class="badge warn">{{ buckets.today|length }}</span></div>
+        {% include "crm/_follow_up_table.html" with tasks=buckets.today empty_title="Nothing due today" %}
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h2>Upcoming</h2><span class="badge">{{ buckets.upcoming|length }}</span></div>
+        {% include "crm/_follow_up_table.html" with tasks=buckets.upcoming empty_title="Nothing scheduled ahead" %}
+      </div>
+      {% if include_completed %}
+        <div class="panel">
+          <div class="panel-head"><h2>Recently completed</h2></div>
+          {% include "crm/_follow_up_table.html" with tasks=buckets.completed empty_title="None completed yet" %}
+        </div>
+      {% endif %}
+    </div>
+
+    <div class="panel">
+      <div class="panel-head"><h3>Schedule a follow-up</h3></div>
+      <form method="post" action="{% url 'crm:follow_up_create' %}">
+        {% csrf_token %}
+        <input type="hidden" name="next" value="{{ request.path }}">
+        {% include "partials/_form.html" with form=form %}
+        <div class="form-actions"><button class="btn" type="submit">Schedule</button></div>
+      </form>
+    </div>
+  </div>
+{% endblock %}

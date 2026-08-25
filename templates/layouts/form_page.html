@@ -1,0 +1,15 @@
+{% extends "layouts/base.html" %}
+
+{% block content %}
+  <div class="panel">
+    <form method="post" enctype="multipart/form-data">
+      {% csrf_token %}
+      {% include "partials/_form.html" with form=form %}
+      <div class="form-actions">
+        <button class="btn" type="submit">{% block submit_label %}Save{% endblock %}</button>
+        <a class="btn ghost" href="{% block cancel_url %}{{ request.META.HTTP_REFERER|default:'/' }}{% endblock %}">Cancel</a>
+      </div>
+    </form>
+  </div>
+  {% block form_extra %}{% endblock %}
+{% endblock %}

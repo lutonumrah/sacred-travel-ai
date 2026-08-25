@@ -1,0 +1,16 @@
+{% extends "layouts/form_page.html" %}
+{% block submit_label %}Create booking{% endblock %}
+{% block cancel_url %}{% url 'bookings:list' %}{% endblock %}
+
+{% block form_extra %}
+  <div class="panel">
+    <div class="panel-head"><h3>How pricing works</h3></div>
+    <p class="muted small">
+      Enter the amount to charge as the subtotal. Tax is added automatically at the
+      <span class="mono">BOOKING_TAX_PERCENT</span> rate and the booking is saved as
+      <strong>Pending Payment</strong> with a generated booking number. Open the booking
+      afterwards to raise the Razorpay order.
+    </p>
+    <p class="muted small">Find inventory IDs on the <a href="{% url 'inventory:search' %}">inventory search</a> page.</p>
+  </div>
+{% endblock %}

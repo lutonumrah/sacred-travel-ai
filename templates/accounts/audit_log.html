@@ -1,0 +1,26 @@
+{% extends "layouts/base.html" %}
+
+{% block content %}
+  <div class="panel">
+    <div class="table-wrap">
+      <table class="data">
+        <thead><tr><th>When</th><th>Actor</th><th>Action</th><th>Entity</th><th>IP</th><th>Detail</th></tr></thead>
+        <tbody>
+          {% for entry in page_obj %}
+            <tr>
+              <td class="nowrap small">{{ entry.created_at|date:"d M Y H:i" }}</td>
+              <td>{{ entry.actor.get_username|default:"system" }}</td>
+              <td><span class="badge grey">{{ entry.action }}</span></td>
+              <td class="small">{{ entry.entity_type }}{% if entry.entity_id %} #{{ entry.entity_id }}{% endif %}</td>
+              <td class="mono small">{{ entry.ip_address|default:"—" }}</td>
+              <td class="mono small">{{ entry.metadata }}</td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="6">{% include "partials/_empty.html" with title="No audited actions yet" %}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% include "partials/_pagination.html" %}
+  </div>
+{% endblock %}

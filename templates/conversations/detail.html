@@ -1,0 +1,127 @@
+{% extends "layouts/base.html" %}
+
+{% block page_actions %}
+  <a class="btn ghost" href="{% url 'conversations:inbox' %}">Inbox</a>
+  {% if conversation.status == 'human_active' %}
+    <form method="post" action="{% url 'conversations:resume_ai' conversation.pk %}" class="inline-form">
+      {% csrf_token %}<button class="btn secondary" type="submit">Hand back to AI</button>
+    </form>
+  {% elif conversation.status != 'closed' %}
+    <form method="post" action="{% url 'conversations:take_over' conversation.pk %}" class="inline-form">
+      {% csrf_token %}<button class="btn" type="submit">Take over</button>
+    </form>
+  {% endif %}
+  {% if conversation.status != 'closed' %}
+    <form method="post" action="{% url 'conversations:close' conversation.pk %}" class="inline-form"
+          onsubmit="return confirm('Close this conversation?')">
+      {% csrf_token %}<button class="btn ghost" type="submit">Close</button>
+    </form>
+  {% endif %}
+{% endblock %}
+
+{% block content %}
+  <div class="split">
+    <div class="panel">
+      <div class="panel-head">
+        <h2>Transcript</h2>
+        <span class="badge status-{{ conversation.status }}">{{ conversation.get_status_display }}</span>
+      </div>
+      <div class="chat-window" id="chat-window">
+        {% for message in messages_list %}
+          <div class="bubble {{ message.sender_type }}">
+            <span class="who">
+              {% if message.sender_type == 'agent' %}{{ message.sender_user.get_username|default:"Agent" }}
+              {% elif message.sender_type == 'ai' %}AI assistant
+              {% elif message.sender_type == 'customer' %}Customer
+              {% else %}System{% endif %}
+              {% if message.metadata.engine %} · {{ message.metadata.engine }}{% endif %}
+            </span>
+            {{ message.content }}
+            <span class="when">{{ message.created_at|date:"d M H:i" }}</span>
+          </div>
+        {% empty %}
+          <p class="muted small">No messages yet.</p>
+        {% endfor %}
+      </div>
+
+      {% if can_reply %}
+        <form method="post" action="{% url 'conversations:reply' conversation.pk %}" class="reply-box">
+          {% csrf_token %}
+          {{ reply_form.content }}
+          <div class="form-actions">
+            <button class="btn" type="submit">Send reply</button>
+            <span class="muted small">Sending a reply takes this chat over from the AI.</span>
+          </div>
+        </form>
+      {% else %}
+        <p class="muted small" style="margin-top:1rem">This conversation is closed.</p>
+      {% endif %}
+    </div>
+
+    <div>
+      <div class="panel">
+        <div class="panel-head"><h3>What the AI learned</h3></div>
+        {% if requirements %}
+          <dl class="definition">
+            {% for key, value in requirements.items %}<dt>{{ key }}</dt><dd>{{ value }}</dd>{% endfor %}
+          </dl>
+        {% else %}<p class="muted small">Nothing extracted yet.</p>{% endif %}
+        {% if contact %}
+          <h4 style="margin:1rem 0 .4rem">Contact captured</h4>
+          <dl class="definition">
+            {% for key, value in contact.items %}<dt>{{ key }}</dt><dd>{{ value }}</dd>{% endfor %}
+          </dl>
+        {% endif %}
+      </div>
+
+      <div class="panel">
+        <div class="panel-head"><h3>Linked records</h3></div>
+        <dl class="definition">
+          <dt>Website</dt><dd>{{ conversation.website.name|default:"—" }}</dd>
+          <dt>Customer</dt>
+          <dd>{% if conversation.customer %}<a href="{% url 'crm:customer_detail' conversation.customer.pk %}">{{ conversation.customer.full_name }}</a>{% else %}—{% endif %}</dd>
+          <dt>Lead</dt>
+          <dd>{% if conversation.lead %}<a href="{% url 'crm:lead_detail' conversation.lead.pk %}">{{ conversation.lead.title }}</a>
+              <span class="badge status-{{ conversation.lead.status }}">{{ conversation.lead.get_status_display }}</span>{% else %}—{% endif %}</dd>
+          <dt>Session</dt><dd class="mono small">{{ conversation.session_key }}</dd>
+          <dt>Started</dt><dd>{{ conversation.created_at|date:"d M Y H:i" }}</dd>
+        </dl>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head"><h3>Recommended</h3></div>
+        {% for rec in recommendations %}
+          <div style="padding:.4rem 0;border-bottom:1px solid var(--line)">
+            <strong>{{ rec.title }}</strong>
+            <div class="muted small">{{ rec.inventory_type }} #{{ rec.object_id }} · {{ rec.currency }} {{ rec.price|floatformat:0 }}</div>
+          </div>
+        {% empty %}
+          <p class="muted small">Nothing recommended yet.</p>
+        {% endfor %}
+      </div>
+
+      {% if handoffs %}
+        <div class="panel">
+          <div class="panel-head"><h3>Handoffs</h3></div>
+          <ul class="timeline">
+            {% for handoff in handoffs %}
+              <li>
+                <strong>{{ handoff.taken_by.get_username|default:"unassigned" }}</strong>
+                <div class="when">{{ handoff.created_at|date:"d M H:i" }}{% if handoff.resumed_ai_at %} → AI resumed {{ handoff.resumed_ai_at|date:"d M H:i" }}{% endif %}</div>
+                {% if handoff.reason %}<div class="muted small">{{ handoff.reason }}</div>{% endif %}
+              </li>
+            {% endfor %}
+          </ul>
+        </div>
+      {% endif %}
+    </div>
+  </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // Open the transcript scrolled to the newest message.
+  const chat = document.getElementById("chat-window");
+  if (chat) chat.scrollTop = chat.scrollHeight;
+</script>
+{% endblock %}

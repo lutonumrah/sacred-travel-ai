@@ -1,0 +1,8 @@
+{% extends "layouts/base.html" %}
+
+{% block page_actions %}<a class="btn ghost" href="{% url 'conversations:inbox' %}">Live inbox</a>{% endblock %}
+
+{% block content %}
+  {% include "partials/_filters.html" %}
+  {% include "conversations/_conversation_table.html" with page_obj=page_obj total=total %}
+{% endblock %}

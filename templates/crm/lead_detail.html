@@ -1,0 +1,139 @@
+{% extends "layouts/base.html" %}
+
+{% block page_actions %}
+  <a class="btn ghost" href="{% url 'crm:leads' %}">All leads</a>
+  <a class="btn ghost" href="{% url 'crm:lead_edit' lead.pk %}">Edit</a>
+  <a class="btn" href="{% url 'bookings:create' %}">Create booking</a>
+{% endblock %}
+
+{% block content %}
+  <div class="split">
+    <div>
+      <div class="panel">
+        <div class="panel-head">
+          <h2>Trip request</h2>
+          <span class="badge status-{{ lead.status }}">{{ lead.get_status_display }}</span>
+        </div>
+        <dl class="definition">
+          <dt>Customer</dt>
+          <dd>{% if lead.customer %}<a href="{% url 'crm:customer_detail' lead.customer.pk %}">{{ lead.customer.full_name }}</a>
+              <div class="muted small">{{ lead.customer.email }} {{ lead.customer.phone }}</div>{% else %}—{% endif %}</dd>
+          <dt>Destination</dt><dd>{{ lead.destination|default:"—" }}</dd>
+          <dt>Travel</dt><dd>{{ lead.travel_start|date:"d M Y"|default:"—" }}{% if lead.travel_end %} → {{ lead.travel_end|date:"d M Y" }}{% endif %}</dd>
+          <dt>Travellers</dt><dd>{{ lead.travelers_count }}</dd>
+          <dt>Budget</dt><dd>{% if lead.budget_max %}{{ lead.budget_min|default:"0" }} – {{ lead.budget_max }}{% else %}—{% endif %}</dd>
+          <dt>Source</dt><dd>{{ lead.get_source_display }}{% if lead.website %} · {{ lead.website.source_identifier }}{% endif %}</dd>
+          <dt>Score</dt><dd><strong>{{ lead.score }}</strong> / 100</dd>
+          {% if lead.lost_reason %}<dt>Lost because</dt><dd>{{ lead.lost_reason }}</dd>{% endif %}
+        </dl>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head"><h2>Notes</h2></div>
+        <form method="post" action="{% url 'crm:lead_note' lead.pk %}">
+          {% csrf_token %}
+          {% include "partials/_form.html" with form=note_form %}
+          <div class="form-actions"><button class="btn secondary" type="submit">Add note</button></div>
+        </form>
+        <div style="margin-top:1rem">
+          {% for note in notes %}
+            <div style="padding:.6rem 0;border-top:1px solid var(--line)">
+              <div class="muted small">{{ note.author.get_username|default:"system" }} · {{ note.created_at|date:"d M Y H:i" }}
+                {% if note.is_internal %}<span class="badge grey">Internal</span>{% endif %}</div>
+              <div>{{ note.body|linebreaksbr }}</div>
+            </div>
+          {% empty %}
+            <p class="muted small">No notes yet.</p>
+          {% endfor %}
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head"><h2>Activity</h2></div>
+        <ul class="timeline">
+          {% for activity in activities %}
+            <li>
+              <strong>{{ activity.summary }}</strong>
+              <div class="when">{{ activity.activity_type }} ·
+                {{ activity.actor.get_username|default:"system" }} · {{ activity.created_at|date:"d M Y H:i" }}</div>
+            </li>
+          {% empty %}
+            <li class="muted">No activity recorded.</li>
+          {% endfor %}
+        </ul>
+      </div>
+    </div>
+
+    <div>
+      <div class="panel">
+        <div class="panel-head"><h3>Move stage</h3></div>
+        <form method="post" action="{% url 'crm:lead_status' lead.pk %}">
+          {% csrf_token %}
+          {% include "partials/_form.html" with form=status_form %}
+          <div class="form-actions"><button class="btn" type="submit">Update status</button></div>
+        </form>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head"><h3>Assignment</h3></div>
+        <form method="post" action="{% url 'crm:lead_assign' lead.pk %}">
+          {% csrf_token %}
+          {% include "partials/_form.html" with form=assign_form %}
+          <div class="form-actions"><button class="btn secondary" type="submit">Assign</button></div>
+        </form>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head"><h3>Follow-ups</h3></div>
+        {% for task in follow_ups %}
+          <div style="padding:.5rem 0;border-bottom:1px solid var(--line)">
+            <strong>{{ task.title }}</strong>
+            <div class="muted small">Due {{ task.due_at|date:"d M Y H:i" }} · {{ task.assigned_to.get_username|default:"unassigned" }}</div>
+            {% if not task.is_completed %}
+              <form method="post" action="{% url 'crm:follow_up_complete' task.pk %}" class="inline-form">
+                {% csrf_token %}
+                <input type="hidden" name="next" value="{{ request.path }}">
+                <button class="btn small ghost" type="submit">Mark done</button>
+              </form>
+            {% else %}<span class="badge ok">Done</span>{% endif %}
+          </div>
+        {% empty %}
+          <p class="muted small">Nothing scheduled.</p>
+        {% endfor %}
+
+        <h4 style="margin:1rem 0 .5rem">Schedule one</h4>
+        <form method="post" action="{% url 'crm:follow_up_create' %}">
+          {% csrf_token %}
+          <input type="hidden" name="next" value="{{ request.path }}">
+          {% include "partials/_form.html" with form=follow_up_form %}
+          <div class="form-actions"><button class="btn secondary" type="submit">Schedule</button></div>
+        </form>
+      </div>
+
+      {% if conversations %}
+        <div class="panel">
+          <div class="panel-head"><h3>Chats</h3></div>
+          {% for conversation in conversations %}
+            <div style="padding:.35rem 0">
+              <a href="{% url 'conversations:detail' conversation.pk %}">Chat {{ conversation.session_key|slice:":8" }}</a>
+              <span class="badge status-{{ conversation.status }}">{{ conversation.get_status_display }}</span>
+            </div>
+          {% endfor %}
+        </div>
+      {% endif %}
+
+      {% if bookings %}
+        <div class="panel">
+          <div class="panel-head"><h3>Bookings</h3></div>
+          {% for booking in bookings %}
+            <div style="padding:.35rem 0">
+              <a href="{% url 'bookings:detail' booking.pk %}">{{ booking.booking_number }}</a>
+              <span class="badge status-{{ booking.status }}">{{ booking.get_status_display }}</span>
+              <div class="muted small">{{ booking.currency }} {{ booking.total_amount|floatformat:2 }}</div>
+            </div>
+          {% endfor %}
+        </div>
+      {% endif %}
+    </div>
+  </div>
+{% endblock %}

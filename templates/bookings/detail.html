@@ -1,0 +1,125 @@
+{% extends "layouts/base.html" %}
+
+{% block page_actions %}
+  <a class="btn ghost" href="{% url 'bookings:list' %}">All bookings</a>
+  {% if booking.status == 'pending' or booking.status == 'draft' %}
+    {% if not pending_payment %}
+      <form method="post" action="{% url 'bookings:payment_create' booking.pk %}" class="inline-form">
+        {% csrf_token %}<button class="btn" type="submit">Create payment order</button>
+      </form>
+    {% endif %}
+  {% endif %}
+{% endblock %}
+
+{% block content %}
+  <div class="split">
+    <div>
+      <div class="panel">
+        <div class="panel-head">
+          <h2>Booking summary</h2>
+          <span class="badge status-{{ booking.status }}">{{ booking.get_status_display }}</span>
+        </div>
+        <dl class="definition">
+          <dt>Number</dt><dd class="mono">{{ booking.booking_number }}</dd>
+          <dt>Customer</dt><dd><a href="{% url 'crm:customer_detail' booking.customer.pk %}">{{ booking.customer.full_name }}</a>
+            <div class="muted small">{{ booking.customer.email }} {{ booking.customer.phone }}</div></dd>
+          <dt>Product</dt><dd>{{ booking.product_name }} <span class="muted small">({{ booking.product_type }} #{{ booking.product_id }})</span></dd>
+          <dt>Travel</dt><dd>{{ booking.travel_start|date:"d M Y"|default:"—" }}{% if booking.travel_end %} → {{ booking.travel_end|date:"d M Y" }}{% endif %}</dd>
+          <dt>Travellers</dt><dd>{{ booking.travelers_count }}</dd>
+          <dt>Website</dt><dd>{{ booking.website.name|default:"—" }}</dd>
+          {% if booking.lead %}<dt>Lead</dt><dd><a href="{% url 'crm:lead_detail' booking.lead.pk %}">{{ booking.lead.title }}</a></dd>{% endif %}
+          {% if booking.conversation %}<dt>Chat</dt><dd><a href="{% url 'conversations:detail' booking.conversation.pk %}">Open transcript</a></dd>{% endif %}
+          <dt>Created by</dt><dd>{{ booking.created_by.get_username|default:"system" }} · {{ booking.created_at|date:"d M Y H:i" }}</dd>
+          {% if booking.confirmed_at %}<dt>Confirmed</dt><dd>{{ booking.confirmed_at|date:"d M Y H:i" }}</dd>{% endif %}
+        </dl>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head"><h2>Payments</h2>
+          {% if not is_live_gateway %}<span class="badge warn">Simulation mode</span>{% endif %}
+        </div>
+        <div class="table-wrap">
+          <table class="data">
+            <thead><tr><th>Order</th><th>Payment</th><th class="right">Amount</th><th>Status</th><th>Paid</th></tr></thead>
+            <tbody>
+              {% for payment in payments %}
+                <tr>
+                  <td class="mono small">{{ payment.razorpay_order_id|default:"—" }}</td>
+                  <td class="mono small">{{ payment.razorpay_payment_id|default:"—" }}</td>
+                  <td class="right">{{ payment.currency }} {{ payment.amount|floatformat:2 }}</td>
+                  <td><span class="badge status-{{ payment.status }}">{{ payment.get_status_display }}</span>
+                    {% if payment.failure_reason %}<div class="muted small">{{ payment.failure_reason }}</div>{% endif %}</td>
+                  <td class="small">{{ payment.paid_at|date:"d M Y H:i"|default:"—" }}</td>
+                </tr>
+              {% empty %}
+                <tr><td colspan="5">{% include "partials/_empty.html" with title="No payment attempts" hint="Create a payment order to start the Razorpay checkout." %}</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+
+        {% if pending_payment %}
+          <div class="form-actions">
+            {% if is_live_gateway %}
+              <button class="btn" type="button" id="pay-now">Pay with Razorpay</button>
+              <span class="muted small">Opens Razorpay Checkout for order {{ pending_payment.razorpay_order_id }}.</span>
+            {% else %}
+              <form method="post" action="{% url 'bookings:payment_simulate' booking.pk %}" class="inline-form">
+                {% csrf_token %}<button class="btn" type="submit">Complete simulated payment</button>
+              </form>
+              <span class="muted small">No Razorpay keys configured — this signs and verifies the payment locally.</span>
+            {% endif %}
+          </div>
+        {% endif %}
+      </div>
+    </div>
+
+    <div>
+      <div class="panel">
+        <div class="panel-head"><h3>Amount</h3></div>
+        <dl class="definition">
+          <dt>Subtotal</dt><dd>{{ booking.currency }} {{ booking.subtotal|floatformat:2 }}</dd>
+          <dt>Tax</dt><dd>{{ booking.currency }} {{ booking.tax_amount|floatformat:2 }}</dd>
+          <dt><strong>Total</strong></dt><dd><strong>{{ booking.currency }} {{ booking.total_amount|floatformat:2 }}</strong></dd>
+        </dl>
+      </div>
+
+      {% if booking.status != 'cancelled' and booking.status != 'confirmed' %}
+        <div class="panel">
+          <div class="panel-head"><h3>Cancel</h3></div>
+          <form method="post" action="{% url 'bookings:cancel' booking.pk %}"
+                onsubmit="return confirm('Cancel {{ booking.booking_number }}?')">
+            {% csrf_token %}
+            <div class="form-row"><label for="reason">Reason</label><input class="input" id="reason" name="reason"></div>
+            <div class="form-actions"><button class="btn danger" type="submit">Cancel booking</button></div>
+          </form>
+        </div>
+      {% endif %}
+    </div>
+  </div>
+{% endblock %}
+
+{% block scripts %}
+{% if pending_payment and is_live_gateway %}
+<script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+<script>
+  // Hand the order to Razorpay Checkout, then post the signature back for verification.
+  const options = {{ checkout_payload|safe }};
+  options.handler = function (response) {
+    fetch("{% url 'api_bookings:payment_verify' %}", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-CSRFToken": document.cookie.replace(/(?:(?:^|.*;\s*)csrftoken\s*=\s*([^;]*).*$)|^.*$/, "$1"),
+      },
+      body: JSON.stringify(response),
+    })
+      .then((r) => r.json())
+      .then(() => window.location.reload());
+  };
+  document.getElementById("pay-now").addEventListener("click", function () {
+    new Razorpay(options).open();
+  });
+</script>
+{% endif %}
+{% endblock %}

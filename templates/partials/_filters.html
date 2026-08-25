@@ -1,0 +1,8 @@
+{% comment %}A GET filter bar. Pass `filter_form`.{% endcomment %}
+<form method="get" class="filter-bar">
+  {% for field in filter_form %}{% include "partials/_field.html" with field=field %}{% endfor %}
+  <div class="form-row filter-actions">
+    <button class="btn" type="submit">Filter</button>
+    <a class="btn ghost" href="{{ request.path }}">Reset</a>
+  </div>
+</form>

@@ -1,0 +1,42 @@
+{% extends "layouts/form_page.html" %}
+{% block submit_label %}Save hotel{% endblock %}
+{% block cancel_url %}{% url 'inventory:hotels' %}{% endblock %}
+
+{% block form_extra %}
+  {% if object %}
+    <div class="panel">
+      <div class="panel-head"><h2>Room offers</h2></div>
+      <div class="table-wrap">
+        <table class="data">
+          <thead><tr><th>Offer</th><th>Room</th><th class="right">Price</th><th>Valid</th><th>Status</th><th></th></tr></thead>
+          <tbody>
+            {% for offer in offers %}
+              <tr>
+                <td><strong>{{ offer.title }}</strong>{% if offer.inclusions %}<div class="muted small">{{ offer.inclusions }}</div>{% endif %}</td>
+                <td>{{ offer.room_type|default:"—" }}</td>
+                <td class="right">{{ offer.currency }} {{ offer.price|floatformat:0 }}</td>
+                <td class="small">{{ offer.valid_from|date:"d M Y"|default:"—" }} → {{ offer.valid_to|date:"d M Y"|default:"—" }}</td>
+                <td>{% if offer.is_active %}<span class="badge ok">Active</span>{% else %}<span class="badge grey">Off</span>{% endif %}</td>
+                <td class="actions">
+                  <form method="post" action="{% url 'inventory:offer_delete' object.pk offer.pk %}" class="inline-form"
+                        onsubmit="return confirm('Remove this offer?')">
+                    {% csrf_token %}<button class="btn small danger" type="submit">Remove</button>
+                  </form>
+                </td>
+              </tr>
+            {% empty %}
+              <tr><td colspan="6">{% include "partials/_empty.html" with title="No offers yet" hint="Offers let you price specific room types or seasons." %}</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+      <h3 style="margin-top:1.25rem">Add an offer</h3>
+      <form method="post" action="{% url 'inventory:offer_create' object.pk %}">
+        {% csrf_token %}
+        {% include "partials/_form.html" with form=offer_form %}
+        <div class="form-actions"><button class="btn secondary" type="submit">Add offer</button></div>
+      </form>
+    </div>
+  {% endif %}
+{% endblock %}

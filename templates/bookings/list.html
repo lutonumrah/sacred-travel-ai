@@ -1,0 +1,44 @@
+{% extends "layouts/base.html" %}
+
+{% block page_actions %}
+  <a class="btn ghost" href="{% url 'bookings:payments' %}">Payments</a>
+  <a class="btn ghost" href="{% url 'dashboard:report_export' 'bookings' %}">Export CSV</a>
+  <a class="btn" href="{% url 'bookings:create' %}">Create booking</a>
+{% endblock %}
+
+{% block content %}
+  <div class="kpi-grid">
+    {% for status, count in status_counts.items %}
+      <div class="kpi"><div class="kpi-label">{{ status }}</div><div class="kpi-value">{{ count }}</div></div>
+    {% endfor %}
+  </div>
+
+  {% include "partials/_filters.html" %}
+
+  <div class="panel">
+    <div class="panel-head"><h2>{{ total }} booking{{ total|pluralize }}</h2></div>
+    <div class="table-wrap">
+      <table class="data">
+        <thead><tr><th>Number</th><th>Customer</th><th>Product</th><th>Travel</th><th class="right">Total</th><th>Status</th><th>Created</th><th></th></tr></thead>
+        <tbody>
+          {% for booking in page_obj %}
+            <tr>
+              <td><strong><a href="{% url 'bookings:detail' booking.pk %}">{{ booking.booking_number }}</a></strong>
+                {% if booking.website %}<div class="muted small">{{ booking.website.source_identifier }}</div>{% endif %}</td>
+              <td><a href="{% url 'crm:customer_detail' booking.customer.pk %}">{{ booking.customer.full_name }}</a></td>
+              <td>{{ booking.product_name }}<div class="muted small">{{ booking.product_type }} #{{ booking.product_id }}</div></td>
+              <td class="small nowrap">{{ booking.travel_start|date:"d M"|default:"—" }}{% if booking.travel_end %} → {{ booking.travel_end|date:"d M" }}{% endif %}</td>
+              <td class="right">{{ booking.currency }} {{ booking.total_amount|floatformat:2 }}</td>
+              <td><span class="badge status-{{ booking.status }}">{{ booking.get_status_display }}</span></td>
+              <td class="small nowrap">{{ booking.created_at|date:"d M Y" }}</td>
+              <td class="actions"><a class="btn small ghost" href="{% url 'bookings:detail' booking.pk %}">Open</a></td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="8">{% include "partials/_empty.html" with title="No bookings match" hint="Create a booking from a lead, or from a chat recommendation." %}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% include "partials/_pagination.html" %}
+  </div>
+{% endblock %}

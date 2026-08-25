@@ -1,0 +1,97 @@
+{% extends "layouts/base.html" %}
+
+{% block page_actions %}
+  <form method="get" class="inline-form">
+    <select class="input" name="days" onchange="this.form.submit()">
+      <option value="7" {% if days == 7 %}selected{% endif %}>Last 7 days</option>
+      <option value="30" {% if days == 30 %}selected{% endif %}>Last 30 days</option>
+      <option value="90" {% if days == 90 %}selected{% endif %}>Last 90 days</option>
+      <option value="365" {% if days == 365 %}selected{% endif %}>Last year</option>
+    </select>
+  </form>
+  <a class="btn ghost" href="{% url 'dashboard:report_export' 'leads' %}">Leads CSV</a>
+  <a class="btn ghost" href="{% url 'dashboard:report_export' 'bookings' %}">Bookings CSV</a>
+{% endblock %}
+
+{% block content %}
+  <div class="kpi-grid">
+    <div class="kpi accent"><div class="kpi-label">Leads</div><div class="kpi-value">{{ kpis.leads_total }}</div></div>
+    <div class="kpi ok"><div class="kpi-label">Converted</div><div class="kpi-value">{{ kpis.leads_converted }}</div>
+      <div class="kpi-hint">{{ kpis.conversion_rate }}%</div></div>
+    <div class="kpi"><div class="kpi-label">Bookings</div><div class="kpi-value">{{ booking_report.total }}</div></div>
+    <div class="kpi ok"><div class="kpi-label">Revenue</div><div class="kpi-value">₹{{ kpis.revenue|floatformat:0 }}</div></div>
+  </div>
+
+  <div class="grid grid-2">
+    <div class="panel">
+      <div class="panel-head"><h2>Leads by source</h2></div>
+      {% for row in leads_by_source %}
+        <div class="bar-row">
+          <span class="small">{{ row.source }}</span>
+          <span class="bar-track"><span class="bar-fill" style="width:{% widthratio row.total kpis.leads_total 100 %}%"></span></span>
+          <span class="right small">{{ row.total }}</span>
+        </div>
+      {% empty %}<p class="muted small">No leads in this period.</p>{% endfor %}
+    </div>
+
+    <div class="panel">
+      <div class="panel-head"><h2>Leads by status</h2></div>
+      {% for row in leads_by_status %}
+        <div class="bar-row">
+          <span class="small">{{ row.status }}</span>
+          <span class="bar-track"><span class="bar-fill" style="width:{% widthratio row.total kpis.leads_total 100 %}%"></span></span>
+          <span class="right small">{{ row.total }}</span>
+        </div>
+      {% empty %}<p class="muted small">No leads yet.</p>{% endfor %}
+    </div>
+
+    <div class="panel">
+      <div class="panel-head"><h2>Bookings by product</h2></div>
+      <div class="table-wrap">
+        <table class="data">
+          <thead><tr><th>Product type</th><th class="right">Bookings</th><th class="right">Revenue</th></tr></thead>
+          <tbody>
+            {% for row in booking_report.by_product %}
+              <tr><td>{{ row.product_type }}</td><td class="right">{{ row.total }}</td>
+                <td class="right">₹{{ row.revenue|floatformat:0 }}</td></tr>
+            {% empty %}
+              <tr><td colspan="3">{% include "partials/_empty.html" with title="No bookings in this period" %}</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head"><h2>Top destinations</h2></div>
+      <div class="table-wrap">
+        <table class="data">
+          <thead><tr><th>Destination</th><th class="right">Leads</th></tr></thead>
+          <tbody>
+            {% for row in top_destinations %}
+              <tr><td>{{ row.destination }}</td><td class="right">{{ row.total }}</td></tr>
+            {% empty %}
+              <tr><td colspan="2">{% include "partials/_empty.html" with title="No destination data yet" %}</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head"><h2>Revenue by day</h2></div>
+    <div class="table-wrap">
+      <table class="data">
+        <thead><tr><th>Day</th><th class="right">Settled</th></tr></thead>
+        <tbody>
+          {% for row in revenue_by_day %}
+            <tr><td>{{ row.day|date:"d M Y" }}</td><td class="right">₹{{ row.total|floatformat:2 }}</td></tr>
+          {% empty %}
+            <tr><td colspan="2">{% include "partials/_empty.html" with title="No settled payments in this period" %}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+{% endblock %}

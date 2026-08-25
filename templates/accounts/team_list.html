@@ -1,0 +1,29 @@
+{% extends "layouts/base.html" %}
+
+{% block page_actions %}
+  <a class="btn ghost" href="{% url 'accounts:users' %}">Users</a>
+  <a class="btn" href="{% url 'accounts:team_create' %}">Add team</a>
+{% endblock %}
+
+{% block content %}
+  <div class="panel">
+    <div class="table-wrap">
+      <table class="data">
+        <thead><tr><th>Team</th><th>Description</th><th>Members</th><th>Status</th><th></th></tr></thead>
+        <tbody>
+          {% for team in teams %}
+            <tr>
+              <td><strong>{{ team.name }}</strong></td>
+              <td class="muted">{{ team.description|default:"—" }}</td>
+              <td class="small">{% for member in team.members.all %}{{ member.get_username }}{% if not forloop.last %}, {% endif %}{% empty %}No members{% endfor %}</td>
+              <td>{% if team.is_active %}<span class="badge ok">Active</span>{% else %}<span class="badge grey">Inactive</span>{% endif %}</td>
+              <td class="actions"><a class="btn small ghost" href="{% url 'accounts:team_edit' team.pk %}">Edit</a></td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="5">{% include "partials/_empty.html" with title="No teams yet" hint="Teams let you assign leads and chats to a group instead of one person." %}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+{% endblock %}

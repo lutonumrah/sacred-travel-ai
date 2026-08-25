@@ -1,0 +1,31 @@
+{% load static %}<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Login · Scared Travel AI</title>
+  <link rel="stylesheet" href="{% static 'css/app.css' %}">
+</head>
+<body>
+  <div class="auth-wrap">
+    <div class="auth-panel">
+      <div class="blank-badge">Scared Travel AI OS</div>
+      <h1>Sign in</h1>
+      <p class="muted">Employee, manager, inventory and admin access.</p>
+      {% if form.errors %}
+        <div class="form-error">Your username and password did not match. Please try again.</div>
+      {% endif %}
+      <p class="muted">Demo login: <strong>admin</strong> / <strong>travel1234</strong></p>
+      <form method="post">
+        {% csrf_token %}
+        <label for="{{ form.username.id_for_label }}">Username</label>
+        {{ form.username }}
+        <label for="{{ form.password.id_for_label }}">Password</label>
+        {{ form.password }}
+        <input type="hidden" name="next" value="{{ next }}">
+        <button class="btn" type="submit">Login</button>
+      </form>
+    </div>
+  </div>
+</body>
+</html>

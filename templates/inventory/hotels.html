@@ -1,0 +1,40 @@
+{% extends "layouts/base.html" %}
+
+{% block page_actions %}
+  {% if can_edit %}<a class="btn" href="{% url 'inventory:hotel_create' %}">Add hotel</a>{% endif %}
+{% endblock %}
+
+{% block content %}
+  {% include "partials/_filters.html" %}
+  <div class="panel">
+    <div class="panel-head"><h2>{{ total }} hotel{{ total|pluralize }}</h2></div>
+    <div class="table-wrap">
+      <table class="data">
+        <thead><tr><th>Hotel</th><th>Destination</th><th>Rating</th><th class="right">Base price</th><th class="right">Offers</th><th>Status</th><th></th></tr></thead>
+        <tbody>
+          {% for hotel in page_obj %}
+            <tr>
+              <td><strong>{{ hotel.name }}</strong><div class="muted small">#{{ hotel.pk }}</div></td>
+              <td>{{ hotel.destination.name|default:"—" }}</td>
+              <td>{{ hotel.star_rating }}★</td>
+              <td class="right">{{ hotel.currency }} {{ hotel.base_price|floatformat:0 }}</td>
+              <td class="right">{{ hotel.offers.count }}</td>
+              <td>{% if hotel.is_active %}<span class="badge ok">Active</span>{% else %}<span class="badge grey">Inactive</span>{% endif %}</td>
+              <td class="actions">
+                {% if can_edit %}
+                  <a class="btn small ghost" href="{% url 'inventory:hotel_edit' hotel.pk %}">Edit</a>
+                  <form method="post" action="{% url 'inventory:toggle' 'hotel' hotel.pk %}" class="inline-form">
+                    {% csrf_token %}<button class="btn small ghost" type="submit">{% if hotel.is_active %}Disable{% else %}Enable{% endif %}</button>
+                  </form>
+                {% endif %}
+              </td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="7">{% include "partials/_empty.html" with title="No hotels match" hint="Add hotels so the AI has something to recommend." %}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% include "partials/_pagination.html" %}
+  </div>
+{% endblock %}

@@ -1,0 +1,135 @@
+{% extends "layouts/base.html" %}
+
+{% block page_actions %}
+  <form method="get" style="display:flex;gap:.5rem;align-items:center">
+    <select class="input" name="website" onchange="this.form.submit()">
+      <option value="">All websites</option>
+      {% for site in websites %}
+        <option value="{{ site.pk }}" {% if selected_website and selected_website.pk == site.pk %}selected{% endif %}>{{ site.name }}</option>
+      {% endfor %}
+    </select>
+    <select class="input" name="days" onchange="this.form.submit()">
+      <option value="7" {% if days == 7 %}selected{% endif %}>Last 7 days</option>
+      <option value="30" {% if days == 30 %}selected{% endif %}>Last 30 days</option>
+      <option value="90" {% if days == 90 %}selected{% endif %}>Last 90 days</option>
+    </select>
+  </form>
+{% endblock %}
+
+{% block content %}
+  <div class="kpi-grid">
+    <div class="kpi accent">
+      <div class="kpi-label">Leads</div>
+      <div class="kpi-value">{{ kpis.leads_total }}</div>
+      <div class="kpi-hint">{{ kpis.leads_new }} still new</div>
+    </div>
+    <div class="kpi ok">
+      <div class="kpi-label">Converted</div>
+      <div class="kpi-value">{{ kpis.leads_converted }}</div>
+      <div class="kpi-hint">{{ kpis.conversion_rate }}% conversion</div>
+    </div>
+    <div class="kpi {% if kpis.conversations_waiting %}warn{% endif %}">
+      <div class="kpi-label">Live chats</div>
+      <div class="kpi-value">{{ kpis.conversations_live }}</div>
+      <div class="kpi-hint">{{ kpis.conversations_waiting }} waiting for a human</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">Bookings</div>
+      <div class="kpi-value">{{ kpis.bookings_total }}</div>
+      <div class="kpi-hint">{{ kpis.bookings_confirmed }} confirmed · {{ kpis.bookings_pending }} pending</div>
+    </div>
+    <div class="kpi ok">
+      <div class="kpi-label">Revenue</div>
+      <div class="kpi-value">₹{{ kpis.revenue|floatformat:0 }}</div>
+      <div class="kpi-hint">Avg ₹{{ kpis.average_booking_value|floatformat:0 }} per booking</div>
+    </div>
+    <div class="kpi {% if kpis.follow_ups_overdue %}danger{% endif %}">
+      <div class="kpi-label">Overdue follow-ups</div>
+      <div class="kpi-value">{{ kpis.follow_ups_overdue }}</div>
+      <div class="kpi-hint"><a href="{% url 'crm:follow_ups' %}">Open the list</a></div>
+    </div>
+  </div>
+
+  <div class="grid grid-2">
+    <div class="panel">
+      <div class="panel-head"><h2>Leads per day</h2><span class="muted small">Last {{ days }} days</span></div>
+      {% if leads_by_day %}
+        <div class="spark">
+          {% for row in leads_by_day %}
+            <div style="height:{% widthratio row.total kpis.leads_total 100 %}%" title="{{ row.day }}: {{ row.total }}"></div>
+          {% endfor %}
+        </div>
+        <p class="muted small">{{ kpis.start|date:"d M" }} → {{ kpis.end|date:"d M Y" }}</p>
+      {% else %}
+        {% include "partials/_empty.html" with title="No leads in this period" %}
+      {% endif %}
+    </div>
+
+    <div class="panel">
+      <div class="panel-head"><h2>Pipeline</h2><a class="small" href="{% url 'crm:pipeline' %}">Open board</a></div>
+      {% for status, count in pipeline.items %}
+        <div class="bar-row">
+          <span class="small">{{ status }}</span>
+          <span class="bar-track"><span class="bar-fill" style="width:{% widthratio count kpis.leads_total 100 %}%"></span></span>
+          <span class="right small">{{ count }}</span>
+        </div>
+      {% endfor %}
+    </div>
+  </div>
+
+  <div class="grid grid-3">
+    <div class="panel">
+      <div class="panel-head"><h3>Recent leads</h3></div>
+      {% for lead in activity.leads %}
+        <div style="padding:.4rem 0;border-bottom:1px solid var(--line)">
+          <a href="{% url 'crm:lead_detail' lead.pk %}">{{ lead.title }}</a>
+          <span class="badge status-{{ lead.status }}">{{ lead.get_status_display }}</span>
+          <div class="muted small">{{ lead.created_at|date:"d M H:i" }}</div>
+        </div>
+      {% empty %}<p class="muted small">Nothing yet.</p>{% endfor %}
+    </div>
+
+    <div class="panel">
+      <div class="panel-head"><h3>Live conversations</h3></div>
+      {% for conversation in activity.conversations %}
+        <div style="padding:.4rem 0;border-bottom:1px solid var(--line)">
+          <a href="{% url 'conversations:detail' conversation.pk %}">{{ conversation.session_key|slice:":10" }}</a>
+          <span class="badge status-{{ conversation.status }}">{{ conversation.get_status_display }}</span>
+          <div class="muted small">{{ conversation.website.source_identifier|default:"—" }} · {{ conversation.last_message_at|date:"d M H:i"|default:"—" }}</div>
+        </div>
+      {% empty %}<p class="muted small">Nothing yet.</p>{% endfor %}
+    </div>
+
+    <div class="panel">
+      <div class="panel-head"><h3>Recent bookings</h3></div>
+      {% for booking in activity.bookings %}
+        <div style="padding:.4rem 0;border-bottom:1px solid var(--line)">
+          <a href="{% url 'bookings:detail' booking.pk %}">{{ booking.booking_number }}</a>
+          <span class="badge status-{{ booking.status }}">{{ booking.get_status_display }}</span>
+          <div class="muted small">{{ booking.currency }} {{ booking.total_amount|floatformat:0 }} · {{ booking.created_at|date:"d M" }}</div>
+        </div>
+      {% empty %}<p class="muted small">Nothing yet.</p>{% endfor %}
+    </div>
+  </div>
+
+  {% if reminders %}
+    <div class="panel">
+      <div class="panel-head"><h3>Reminders due</h3></div>
+      {% for task in reminders %}
+        <div style="padding:.4rem 0;border-bottom:1px solid var(--line)">
+          <strong>{{ task.title }}</strong> — <a href="{% url 'crm:lead_detail' task.lead_id %}">{{ task.lead.title }}</a>
+          <div class="muted small">Due {{ task.due_at|date:"d M Y H:i" }}</div>
+        </div>
+      {% endfor %}
+    </div>
+  {% endif %}
+
+  <div class="panel">
+    <div class="panel-head"><h3>Live inventory</h3><a class="small" href="{% url 'inventory:search' %}">Search inventory</a></div>
+    <div class="kpi-grid" style="margin:0">
+      <div class="kpi"><div class="kpi-label">Hotels</div><div class="kpi-value">{{ kpis.inventory_counts.hotels }}</div></div>
+      <div class="kpi"><div class="kpi-label">Cars</div><div class="kpi-value">{{ kpis.inventory_counts.cars }}</div></div>
+      <div class="kpi"><div class="kpi-label">Packages</div><div class="kpi-value">{{ kpis.inventory_counts.packages }}</div></div>
+    </div>
+  </div>
+{% endblock %}

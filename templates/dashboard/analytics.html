@@ -1,0 +1,79 @@
+{% extends "layouts/base.html" %}
+
+{% block page_actions %}
+  <form method="get" class="inline-form">
+    <select class="input" name="days" onchange="this.form.submit()">
+      <option value="30" {% if days == 30 %}selected{% endif %}>Last 30 days</option>
+      <option value="90" {% if days == 90 %}selected{% endif %}>Last 90 days</option>
+      <option value="365" {% if days == 365 %}selected{% endif %}>Last year</option>
+    </select>
+  </form>
+{% endblock %}
+
+{% block content %}
+  <div class="panel">
+    <div class="panel-head"><h2>Website performance</h2><span class="muted small">Last {{ days }} days</span></div>
+    <div class="table-wrap">
+      <table class="data">
+        <thead><tr><th>Website</th><th>Source</th><th class="right">Leads</th><th class="right">Converted</th><th class="right">Rate</th><th class="right">Chats</th><th class="right">Bookings</th><th class="right">Revenue</th></tr></thead>
+        <tbody>
+          {% for row in websites %}
+            <tr>
+              <td><a href="{% url 'websites:detail' row.website.pk %}">{{ row.website.name }}</a></td>
+              <td class="mono small">{{ row.website.source_identifier }}</td>
+              <td class="right">{{ row.leads }}</td>
+              <td class="right">{{ row.converted }}</td>
+              <td class="right">{{ row.conversion_rate }}%</td>
+              <td class="right">{{ row.conversations }}</td>
+              <td class="right">{{ row.bookings }}</td>
+              <td class="right">₹{{ row.revenue|floatformat:0 }}</td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="8">{% include "partials/_empty.html" with title="No websites registered" %}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head"><h2>Employee performance</h2></div>
+    <div class="table-wrap">
+      <table class="data">
+        <thead><tr><th>User</th><th>Role</th><th class="right">Leads</th><th class="right">Converted</th><th class="right">Rate</th><th class="right">Open follow-ups</th><th class="right">Chats</th><th class="right">Revenue</th></tr></thead>
+        <tbody>
+          {% for row in employees %}
+            <tr>
+              <td><strong>{{ row.user.get_full_name|default:row.user.get_username }}</strong></td>
+              <td><span class="badge grey">{{ row.user.get_role_display }}</span></td>
+              <td class="right">{{ row.leads }}</td>
+              <td class="right">{{ row.converted }}</td>
+              <td class="right">{{ row.conversion_rate }}%</td>
+              <td class="right">{{ row.open_follow_ups }}</td>
+              <td class="right">{{ row.conversations }}</td>
+              <td class="right">₹{{ row.revenue|floatformat:0 }}</td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="8">{% include "partials/_empty.html" with title="No assignable users" %}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head"><h2>Where customers want to go</h2></div>
+    <div class="table-wrap">
+      <table class="data">
+        <thead><tr><th>Destination</th><th class="right">Leads</th></tr></thead>
+        <tbody>
+          {% for row in top_destinations %}
+            <tr><td>{{ row.destination }}</td><td class="right">{{ row.total }}</td></tr>
+          {% empty %}
+            <tr><td colspan="2">{% include "partials/_empty.html" with title="No destination data yet" %}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+{% endblock %}

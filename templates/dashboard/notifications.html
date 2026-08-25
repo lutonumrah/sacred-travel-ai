@@ -1,0 +1,42 @@
+{% extends "layouts/base.html" %}
+
+{% block page_actions %}
+  {% if unread_only %}
+    <a class="btn ghost" href="{% url 'dashboard:notifications' %}">Show all</a>
+  {% else %}
+    <a class="btn ghost" href="?unread=1">Unread only</a>
+  {% endif %}
+  <form method="post" action="{% url 'dashboard:notifications_read_all' %}" class="inline-form">
+    {% csrf_token %}<button class="btn" type="submit">Mark all read</button>
+  </form>
+{% endblock %}
+
+{% block content %}
+  <div class="panel">
+    <div class="panel-head">
+      <h2>{{ unread_count }} unread</h2>
+      <span class="muted small">Lead, handoff, payment and follow-up alerts.</span>
+    </div>
+    {% for notification in page_obj %}
+      <div class="notif {% if notification.is_read %}read{% else %}unread{% endif %}">
+        <span class="dot"></span>
+        <div class="body">
+          <strong>{% if notification.link %}<a href="{{ notification.link }}">{{ notification.title }}</a>{% else %}{{ notification.title }}{% endif %}</strong>
+          {% if notification.body %}<div class="muted small">{{ notification.body }}</div>{% endif %}
+          <div class="muted small">
+            <span class="badge grey">{{ notification.get_notification_type_display }}</span>
+            {{ notification.created_at|date:"d M Y H:i" }}
+          </div>
+        </div>
+        {% if not notification.is_read %}
+          <form method="post" action="{% url 'dashboard:notification_read' notification.pk %}" class="inline-form">
+            {% csrf_token %}<button class="btn small ghost" type="submit">Mark read</button>
+          </form>
+        {% endif %}
+      </div>
+    {% empty %}
+      {% include "partials/_empty.html" with title="Nothing to read" hint="Alerts arrive when leads land, chats need a human, or payments settle." %}
+    {% endfor %}
+    {% include "partials/_pagination.html" %}
+  </div>
+{% endblock %}

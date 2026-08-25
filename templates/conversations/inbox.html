@@ -1,0 +1,14 @@
+{% extends "layouts/base.html" %}
+
+{% block page_actions %}
+  <a class="btn ghost" href="{% url 'conversations:history' %}">Full history</a>
+  <a class="btn ghost" href="{% url 'conversations:widget_preview' %}">Widget preview</a>
+{% endblock %}
+
+{% block content %}
+  {% if waiting %}
+    <div class="messages"><li class="warning">{{ waiting }} chat{{ waiting|pluralize }} waiting for a human agent.</li></div>
+  {% endif %}
+  {% include "partials/_filters.html" %}
+  {% include "conversations/_conversation_table.html" with page_obj=page_obj total=total %}
+{% endblock %}

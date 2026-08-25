@@ -1,0 +1,57 @@
+{% extends "layouts/base.html" %}
+{% load static %}
+
+{% block content %}
+  <form method="get" class="filter-bar">
+    <div class="form-row">
+      <label for="website">Website</label>
+      <select class="input" name="website" id="website" onchange="this.form.submit()">
+        {% for site in websites %}
+          <option value="{{ site.pk }}" {% if website and website.pk == site.pk %}selected{% endif %}>{{ site.name }}</option>
+        {% empty %}
+          <option value="">No active websites</option>
+        {% endfor %}
+      </select>
+    </div>
+  </form>
+
+  {% if not website %}
+    <div class="panel">
+      {% include "partials/_empty.html" with title="No active website" hint="Register a website first — the widget is keyed to one." %}
+      <div class="form-actions"><a class="btn" href="{% url 'websites:create' %}">Add a website</a></div>
+    </div>
+  {% elif not api_key %}
+    <div class="panel">
+      {% include "partials/_empty.html" with title="No active widget key" hint="Issue an API key for this website to enable the widget." %}
+      <div class="form-actions"><a class="btn" href="{% url 'websites:detail' website.pk %}">Open website settings</a></div>
+    </div>
+  {% else %}
+    <div class="panel">
+      <div class="panel-head"><h2>Live preview</h2><span class="badge ok">{{ website.name }}</span></div>
+      <p class="muted small">
+        The bubble in the bottom-right corner is the real widget, talking to the real API.
+        Anything you type here creates a genuine conversation and lead, tagged
+        <span class="mono">{{ website.source_identifier }}</span>.
+      </p>
+      <ul class="small muted">
+        <li>Try: <em>“Hi”</em>, then <em>“I want a hotel in Goa for 4 people, budget 40k, 12/03/2027”</em>.</li>
+        <li>Type <em>“I want to talk to a human”</em> to trigger a handoff — it will appear in the inbox.</li>
+      </ul>
+      <div class="form-actions">
+        <a class="btn ghost" href="{% url 'conversations:inbox' %}">Open the inbox</a>
+        <a class="btn ghost" href="{% url 'websites:detail' website.pk %}">Embed snippet</a>
+      </div>
+    </div>
+  {% endif %}
+{% endblock %}
+
+{% block scripts %}
+  {% if api_key %}
+    <script src="{% static 'js/widget.js' %}"
+            data-scared-key="{{ api_key.public_key }}"
+            data-scared-api=""
+            data-scared-color="{{ website.primary_color }}"
+            data-scared-title="{{ website.brand_name|default:website.name }}"
+            defer></script>
+  {% endif %}
+{% endblock %}

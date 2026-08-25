@@ -1,0 +1,41 @@
+{% extends "layouts/base.html" %}
+
+{% block page_actions %}
+  {% if can_edit %}<a class="btn" href="{% url 'inventory:destination_create' %}">Add destination</a>{% endif %}
+{% endblock %}
+
+{% block content %}
+  <form method="get" class="filter-bar">
+    <div class="form-row"><label for="q">Search</label><input class="input" id="q" name="q" value="{{ q }}"></div>
+    <div class="form-row filter-actions">
+      <button class="btn" type="submit">Filter</button>
+      <a class="btn ghost" href="{% url 'inventory:destinations' %}">Reset</a>
+    </div>
+  </form>
+  <div class="panel">
+    <div class="table-wrap">
+      <table class="data">
+        <thead><tr><th>Destination</th><th>Code</th><th>City</th><th>State</th><th>Country</th><th class="right">Hotels</th><th class="right">Cars</th><th class="right">Packages</th><th>Status</th><th></th></tr></thead>
+        <tbody>
+          {% for destination in page_obj %}
+            <tr>
+              <td><strong>{{ destination.name }}</strong></td>
+              <td class="mono">{{ destination.code }}</td>
+              <td>{{ destination.city|default:"—" }}</td>
+              <td>{{ destination.state|default:"—" }}</td>
+              <td>{{ destination.country|default:"—" }}</td>
+              <td class="right">{{ destination.hotels.count }}</td>
+              <td class="right">{{ destination.cars.count }}</td>
+              <td class="right">{{ destination.packages.count }}</td>
+              <td>{% if destination.is_active %}<span class="badge ok">Active</span>{% else %}<span class="badge grey">Inactive</span>{% endif %}</td>
+              <td class="actions">{% if can_edit %}<a class="btn small ghost" href="{% url 'inventory:destination_edit' destination.pk %}">Edit</a>{% endif %}</td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="10">{% include "partials/_empty.html" with title="No destinations yet" hint="Destinations are how the AI recognises where a customer wants to go." %}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% include "partials/_pagination.html" %}
+  </div>
+{% endblock %}
