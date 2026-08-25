@@ -144,6 +144,20 @@ REST_FRAMEWORK = {
 
 CORS_ALLOW_ALL_ORIGINS = DEBUG
 
+# --- Behind a TLS-terminating proxy (nginx) ------------------------------
+# CSRF_TRUSTED_ORIGINS must list the full scheme+host the dashboard is served
+# from, or Django rejects every form POST once DEBUG is off.
+CSRF_TRUSTED_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv("CSRF_TRUSTED_ORIGINS", "").split(",")
+    if origin.strip()
+]
+
+if os.getenv("USE_X_FORWARDED_PROTO", "False").lower() in ("1", "true", "yes"):
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+
 # --- Payments (Razorpay) -------------------------------------------------
 # With no keys configured the gateway runs in simulation mode: orders are
 # created locally so the whole booking flow stays testable offline.
