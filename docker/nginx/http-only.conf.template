@@ -1,0 +1,40 @@
+# Plain-HTTP config, for before DNS points at the box and TLS exists.
+# No certificate is referenced, so nginx starts even with no /etc/letsencrypt.
+# Accepts any Host, so reaching the server by bare IP works.
+upstream django {
+    server web:8000;
+}
+
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name _;
+
+    # Kept so ./docker/init-letsencrypt.sh can complete while in this mode.
+    location /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+    }
+
+    client_max_body_size 25m;
+
+    location /static/ {
+        alias /app/staticfiles/;
+        access_log off;
+        expires 30d;
+    }
+
+    location /media/ {
+        alias /app/media/;
+        access_log off;
+        expires 7d;
+    }
+
+    location / {
+        proxy_pass http://django;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_redirect off;
+    }
+}

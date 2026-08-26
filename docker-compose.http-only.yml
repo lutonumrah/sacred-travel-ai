@@ -1,0 +1,17 @@
+# Serve over plain HTTP only — no TLS, no redirect, any Host accepted.
+# For reaching the server by IP before DNS resolves and a certificate exists.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.http-only.yml up -d
+#
+# Set USE_X_FORWARDED_PROTO=False in .env while using this, or Django marks the
+# session cookie Secure and no one can log in over plain HTTP.
+services:
+  nginx:
+    volumes:
+      - ./docker/nginx/http-only.conf.template:/etc/nginx/templates/app.conf.template:ro
+      - static_files:/app/staticfiles:ro
+      - media_files:/app/media:ro
+      - certbot_conf:/etc/letsencrypt
+      - certbot_www:/var/www/certbot
+    ports: !override
+      - "80:80"

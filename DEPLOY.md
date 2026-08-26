@@ -44,7 +44,7 @@ allows it.
 ## 3. Get the code onto the VPS
 
 ```bash
-git clone <your-repo-url> /opt/scared-travel-ai
+git clone https://github.com/lutonumrah/sacred-travel-ai.git /opt/scared-travel-ai
 cd /opt/scared-travel-ai
 ```
 
@@ -150,6 +150,69 @@ It signs in as `admin` / `travel1234` — **change that password immediately.**
 
 ---
 
+## 8. Check everything works
+
+```bash
+cd /opt/scared-travel-ai
+./docker/verify.sh
+```
+
+It is read-only — it changes nothing — and runs about 25 checks across six
+areas: `.env` sanity (`DEBUG` off, real `SECRET_KEY`, database on the volume),
+container state and health, migrations / `check --deploy` / superuser / static
+files, the HTTP→HTTPS redirect and the health endpoint through nginx, the
+certificate's domains and expiry, DNS and public reachability, and disk space.
+
+Every line is `PASS`, `WARN` or `FAIL`, and the script exits non-zero if
+anything failed, so it also works as a smoke test in a cron job or a CI step.
+
+A healthy run ends with:
+
+```
+Summary
+  25 passed   0 warnings   0 failed
+
+  Everything checks out.
+```
+
+Useful variants:
+
+```bash
+INSECURE=1 ./docker/verify.sh       # while on a staging certificate
+SKIP_PUBLIC=1 ./docker/verify.sh    # before DNS has propagated
+HTTP_PORT=8080 HTTPS_PORT=8443 ./docker/verify.sh   # non-standard ports
+```
+
+### Then check it by hand
+
+The script cannot judge whether the app *looks* right. Open a browser:
+
+| Check | Where |
+|---|---|
+| Certificate is trusted — padlock, no warning | `https://umrahcompany.co.uk` |
+| Login works | `/auth/login/` — your superuser |
+| Dashboard renders with CSS and icons | `/dashboard/` |
+| The AI chat replies | **Conversations → Widget preview**, send "hotel in Dubai for 4 people" |
+| A lead was captured from that chat | **CRM → Leads** — a new *AI Chat* lead |
+| Inventory search returns results | **Inventory → Search** |
+| Admin loads | `/admin/` |
+
+Sending a widget message and then finding the lead in the CRM exercises the
+whole path in one go: nginx → gunicorn → SQLite write → inventory search → lead
+capture. If that works, the deployment is sound.
+
+### If something fails
+
+```bash
+docker compose logs --tail 50 web      # tracebacks, gunicorn boot errors
+docker compose logs --tail 50 nginx    # TLS and upstream errors
+docker compose ps                      # who is up, who is unhealthy
+```
+
+The troubleshooting table at the end of this file covers the usual causes.
+
+---
+
 ## Continuous deployment
 
 [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml) runs the test
@@ -179,7 +242,7 @@ ssh-copy-id -i ~/.ssh/sacred_deploy.pub root@<vps-ip>
 Confirm it works before going further:
 
 ```bash
-ssh -i ~/.ssh/sacred_deploy root@<vps-ip> 'echo connected'
+ssh -i ~/.ssh/sacred_deploy root@153.92.210.143 'echo connected'
 ```
 
 ### 2. Add the repository secrets
