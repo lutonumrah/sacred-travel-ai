@@ -228,6 +228,29 @@ run `collectstatic`, and serve through `gunicorn config.wsgi`.
 
 ---
 
+## Docker
+
+```bash
+cp .env.example .env     # set DOMAIN, CERTBOT_EMAIL, SECRET_KEY, DEBUG=False
+docker compose build
+./docker/init-letsencrypt.sh   # once, issues the TLS certificate
+docker compose up -d
+```
+
+Three containers: gunicorn, nginx (TLS + `/static` + `/media`) and certbot for
+automatic renewal. Migrations and `collectstatic` run on every boot, so
+deploying an update is `git pull && docker compose up -d --build`.
+
+Pushing to `master` deploys automatically: the GitHub Actions workflow in
+[.github/workflows/deploy.yml](.github/workflows/deploy.yml) runs the tests,
+then rolls the VPS onto the new commit — rolling back if it fails its health
+check.
+
+Full VPS walkthrough — DNS, firewall, CD secrets, backups, troubleshooting — in
+[DEPLOY.md](DEPLOY.md).
+
+---
+
 ## Tests
 
 ```bash

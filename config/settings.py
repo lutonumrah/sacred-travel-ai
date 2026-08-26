@@ -98,6 +98,14 @@ def _database_config(url):
     return {
         "ENGINE": "django.db.backends.sqlite3",
         "NAME": BASE_DIR / name,
+        # WAL lets readers run while a write is in flight; without it a
+        # multi-worker gunicorn serialises on the file and raises
+        # "database is locked" under even light concurrency.
+        "OPTIONS": {
+            "timeout": 20,
+            "init_command": "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;",
+            "transaction_mode": "IMMEDIATE",
+        },
     }
 
 

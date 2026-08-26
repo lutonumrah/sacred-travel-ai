@@ -1,0 +1,95 @@
+name: Deploy
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+# Never let two deploys touch the VPS at once, and never cancel one midway —
+# a half-applied migration is worse than a queued deploy.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Run test suite
+        env:
+          DEBUG: "False"
+          SECRET_KEY: ci-only-not-a-real-secret
+          ALLOWED_HOSTS: localhost,127.0.0.1,testserver
+          DATABASE_URL: sqlite:///db.sqlite3
+        run: python manage.py test --verbosity 2
+
+  deploy:
+    name: Deploy to VPS
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Open SSH connection
+        env:
+          SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_PORT: ${{ secrets.VPS_PORT || '22' }}
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          if [ -n "$KNOWN_HOSTS" ]; then
+            printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            echo "::warning::VPS_KNOWN_HOSTS not set — trusting the host key on first sight."
+            ssh-keyscan -p "$VPS_PORT" -H "$VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          fi
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Run deploy script
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_PORT || '22' }}
+          APP_DIR: ${{ secrets.VPS_APP_DIR || '/opt/scared-travel-ai' }}
+        run: |
+          ssh -i ~/.ssh/deploy_key -p "$VPS_PORT" \
+              -o BatchMode=yes -o ConnectTimeout=15 \
+              "$VPS_USER@$VPS_HOST" \
+              "APP_DIR='$APP_DIR' DEPLOY_BRANCH=master bash -s" < docker/deploy.sh
+
+      - name: Verify the live site
+        env:
+          SITE_URL: ${{ secrets.SITE_URL }}
+        run: |
+          if [ -z "$SITE_URL" ]; then
+            echo "::warning::SITE_URL not set — skipping the public health check."
+            exit 0
+          fi
+          for i in $(seq 1 10); do
+            if curl -fsS -o /dev/null "$SITE_URL/api/v1/health/"; then
+              echo "Live site healthy:"
+              curl -fsS "$SITE_URL/api/v1/health/"; echo
+              exit 0
+            fi
+            echo "attempt $i: not healthy yet"
+            sleep 5
+          done
+          echo "::error::$SITE_URL never returned a healthy response."
+          exit 1
+
+      - name: Clean up
+        if: always()
+        run: rm -f ~/.ssh/deploy_key
