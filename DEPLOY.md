@@ -31,6 +31,20 @@ curl -fsSL https://get.docker.com | sh
 systemctl enable --now docker
 ```
 
+**AlmaLinux / RHEL** (the current VPS runs AlmaLinux 10) — `get.docker.com`
+does not support it; use Docker's RHEL repo instead:
+
+```bash
+dnf -y install git dnf-plugins-core
+dnf config-manager --add-repo https://download.docker.com/linux/rhel/docker-ce.repo
+dnf -y install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+systemctl enable --now docker
+```
+
+AlmaLinux uses `firewalld`, not `ufw`. It ships inactive on Hostinger's image;
+if you enable it, open the ports with
+`firewall-cmd --permanent --add-service={ssh,http,https} && firewall-cmd --reload`.
+
 Hostinger VPS images sometimes ship with a firewall enabled. Open the web ports:
 
 ```bash
@@ -107,6 +121,17 @@ docker run --rm python:3.12-slim python -c \
 > `http://153.92.210.143/` to serve directly over plain HTTP with no redirect
 > and no warning, that needs an extra `server` block in
 > `docker/nginx/app.conf.template` — say the word and I will add it.
+
+> **Before DNS resolves**, add this line to `.env` so every `docker compose`
+> command — including the CD deploy script — uses the plain-HTTP overlay:
+>
+> ```ini
+> COMPOSE_FILE=docker-compose.yml:docker-compose.http-only.yml
+> ```
+>
+> Keep `USE_X_FORWARDED_PROTO=False` while it is there. Once the certificate is
+> issued, remove the line, set `USE_X_FORWARDED_PROTO=True` and
+> `docker compose up -d --force-recreate`.
 
 ## 5. Build and issue the certificate
 
