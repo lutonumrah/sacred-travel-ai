@@ -209,11 +209,31 @@ def booking_report(*, days=30):
     return {"by_product": by_product, "by_status": by_status, "total": bookings.count()}
 
 
-def recent_activity(limit=10):
+def recent_activity(limit=10, user=None):
+    """Latest records, limited to what `user` may open (everything when no user)."""
+    leads = Lead.objects.filter(is_deleted=False)
+    bookings = Booking.objects.all()
+    conversations = Conversation.objects.all()
+    if user is not None:
+        from bookings.selectors import visible_bookings
+        from conversations.selectors import visible_conversations
+        from core.mixins import SALES_ROLES
+        from crm.selectors import visible_leads
+
+        if not (user.is_superuser or user.role in SALES_ROLES):
+            leads, bookings, conversations = (
+                leads.none(),
+                bookings.none(),
+                conversations.none(),
+            )
+        else:
+            leads = visible_leads(user)
+            bookings = visible_bookings(user)
+            conversations = visible_conversations(user)
     return {
-        "leads": Lead.objects.filter(is_deleted=False).select_related("customer")[:limit],
-        "bookings": Booking.objects.select_related("customer")[:limit],
-        "conversations": Conversation.objects.select_related("customer", "website").exclude(
+        "leads": leads.select_related("customer")[:limit],
+        "bookings": bookings.select_related("customer")[:limit],
+        "conversations": conversations.select_related("customer", "website").exclude(
             status=ConversationStatus.CLOSED
         )[:limit],
     }

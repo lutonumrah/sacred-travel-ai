@@ -1,12 +1,10 @@
-import json
-
 from django.contrib import messages
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse
 from django.views import View
 from django.views.generic import CreateView, DetailView, TemplateView
 
-from core.mixins import ManagerRequiredMixin, PageMixin
+from core.mixins import ManagerRequiredMixin, SalesRequiredMixin
 from core.selectors import paginate
 
 from . import payments, selectors, services
@@ -14,7 +12,7 @@ from .forms import BookingFilterForm, BookingForm, PaymentFilterForm
 from .models import Booking, BookingStatus, Notification, Payment
 
 
-class BookingListView(PageMixin, TemplateView):
+class BookingListView(SalesRequiredMixin, TemplateView):
     template_name = "bookings/list.html"
     page_title = "Bookings"
     page_subtitle = "Pending, paid, confirmed and cancelled bookings."
@@ -40,7 +38,7 @@ class BookingListView(PageMixin, TemplateView):
         return ctx
 
 
-class BookingCreateView(PageMixin, CreateView):
+class BookingCreateView(SalesRequiredMixin, CreateView):
     model = Booking
     form_class = BookingForm
     template_name = "bookings/form.html"
@@ -60,14 +58,16 @@ class BookingCreateView(PageMixin, CreateView):
         return reverse("bookings:detail", args=[self.object.pk])
 
 
-class BookingDetailView(PageMixin, DetailView):
+class BookingDetailView(SalesRequiredMixin, DetailView):
     model = Booking
     template_name = "bookings/detail.html"
     context_object_name = "booking"
     active_nav = "bookings"
 
     def get_queryset(self):
-        return Booking.objects.select_related("customer", "website", "lead", "created_by")
+        return selectors.visible_bookings(self.request.user).select_related(
+            "customer", "website", "lead", "created_by"
+        )
 
     def get_page_title(self):
         return self.object.booking_number
@@ -83,27 +83,26 @@ class BookingDetailView(PageMixin, DetailView):
         ctx["pending_payment"] = pending
         ctx["is_live_gateway"] = payments.is_live()
         ctx["razorpay_key"] = payments.key_id()
-        ctx["checkout_payload"] = json.dumps(
-            {
-                "key": payments.key_id(),
-                "amount": payments.to_paise(booking.total_amount),
-                "currency": booking.currency,
-                "name": booking.website.name if booking.website else "Scared Travel",
-                "description": booking.product_name,
-                "order_id": pending.razorpay_order_id if pending else "",
-                "prefill": {
-                    "name": booking.customer.full_name,
-                    "email": booking.customer.email,
-                    "contact": booking.customer.phone,
-                },
-            }
-        )
+        # Rendered with `json_script`, never inline, so customer data can't break out.
+        ctx["checkout_payload"] = {
+            "key": payments.key_id(),
+            "amount": payments.to_paise(booking.total_amount),
+            "currency": booking.currency,
+            "name": booking.website.name if booking.website else "Scared Travel",
+            "description": booking.product_name,
+            "order_id": pending.razorpay_order_id if pending else "",
+            "prefill": {
+                "name": booking.customer.full_name,
+                "email": booking.customer.email,
+                "contact": booking.customer.phone,
+            },
+        }
         return ctx
 
 
-class PaymentOrderCreateView(PageMixin, View):
+class PaymentOrderCreateView(SalesRequiredMixin, View):
     def post(self, request, pk):
-        booking = get_object_or_404(Booking, pk=pk)
+        booking = get_object_or_404(selectors.visible_bookings(request.user), pk=pk)
         payment = services.create_payment_order(
             booking=booking, actor=request.user, request=request
         )
@@ -119,7 +118,7 @@ class PaymentSimulateView(ManagerRequiredMixin, View):
     """Complete a simulated checkout so the flow is testable without Razorpay."""
 
     def post(self, request, pk):
-        booking = get_object_or_404(Booking, pk=pk)
+        booking = get_object_or_404(selectors.visible_bookings(request.user), pk=pk)
         if payments.is_live():
             messages.error(
                 request, "Simulation is disabled while live Razorpay keys are configured."
@@ -146,7 +145,7 @@ class PaymentSimulateView(ManagerRequiredMixin, View):
 
 class BookingCancelView(ManagerRequiredMixin, View):
     def post(self, request, pk):
-        booking = get_object_or_404(Booking, pk=pk)
+        booking = get_object_or_404(selectors.visible_bookings(request.user), pk=pk)
         services.cancel_booking(
             booking=booking,
             actor=request.user,
@@ -157,7 +156,7 @@ class BookingCancelView(ManagerRequiredMixin, View):
         return redirect("bookings:detail", pk=pk)
 
 
-class PaymentListView(PageMixin, TemplateView):
+class PaymentListView(SalesRequiredMixin, TemplateView):
     template_name = "bookings/payments.html"
     page_title = "Payments"
     page_subtitle = "Razorpay orders, verification and settlement status."
@@ -169,7 +168,9 @@ class PaymentListView(PageMixin, TemplateView):
         form.is_valid()
         data = form.cleaned_data if form.is_bound and form.is_valid() else {}
         queryset = selectors.list_payments(
-            q=data.get("q", "") or "", status=data.get("status", "") or ""
+            q=data.get("q", "") or "",
+            status=data.get("status", "") or "",
+            user=self.request.user,
         )
         ctx["filter_form"] = form
         ctx["page_obj"] = paginate(queryset, self.request.GET.get("page"))

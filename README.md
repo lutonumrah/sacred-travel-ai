@@ -130,8 +130,11 @@ payment order opens Razorpay Checkout; the returned signature is verified with
 `HMAC-SHA256(order_id|payment_id, key_secret)` before anything is marked paid.
 A verified payment confirms the booking and moves the lead to **Converted**.
 
-The `payment.captured` webhook is verified against the raw request body and is
-idempotent, so Razorpay's retries cannot double-confirm a booking.
+Webhooks are verified against the raw request body. `payment.captured` and
+`order.paid` confirm the booking only when the captured amount and currency match
+the order; `payment.failed` never downgrades a confirmed booking; `refund.processed`
+marks the booking **Refunded**. Each `X-Razorpay-Event-Id` is applied once, so
+Razorpay's retries cannot double-apply an event.
 
 **Without Razorpay keys** the gateway runs in simulation mode: orders are minted
 locally with the same shape and the same signature scheme, and a *"Complete
@@ -221,7 +224,7 @@ All settings come from `.env` (see `.env.example`).
 | `AI_MODEL` | Claude model used until an admin saves AI Settings; defaults to `claude-opus-5-5` |
 | `AI_ENABLED` | Set `false` to force the rule engine even with a key |
 | `RAZORPAY_KEY_ID` / `_SECRET` | Payments run in simulation mode |
-| `RAZORPAY_WEBHOOK_SECRET` | Webhooks verified against the simulation secret |
+| `RAZORPAY_WEBHOOK_SECRET` | Simulation mode: webhooks verified against the simulation secret. With live keys: every webhook is rejected |
 | `BOOKING_TAX_PERCENT` | Defaults to 5 |
 | `DATABASE_URL` | SQLite; set a `postgres://` URL for Postgres |
 

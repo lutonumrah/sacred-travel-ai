@@ -6,18 +6,21 @@ import os
 from decimal import Decimal
 from pathlib import Path
 
+from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
 
 load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-SECRET_KEY = os.getenv(
-    "SECRET_KEY",
-    "django-insecure-scared-travel-ai-dev-only-change-me",
-)
+# Off unless explicitly enabled, so a missing .env can never serve debug pages.
+DEBUG = os.getenv("DEBUG", "False").lower() in ("1", "true", "yes")
 
-DEBUG = os.getenv("DEBUG", "True").lower() in ("1", "true", "yes")
+SECRET_KEY = os.getenv("SECRET_KEY", "")
+if not SECRET_KEY:
+    if not DEBUG:
+        raise ImproperlyConfigured("SECRET_KEY must be set when DEBUG is off.")
+    SECRET_KEY = "django-insecure-scared-travel-ai-dev-only-change-me"
 
 ALLOWED_HOSTS = [
     host.strip()

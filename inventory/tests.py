@@ -1,4 +1,5 @@
 from decimal import Decimal
+from unittest import mock
 
 from django.test import TestCase
 from django.urls import reverse
@@ -145,3 +146,35 @@ class InventoryViewTests(InventoryFixture):
         from .models import InventoryWebsiteVisibility
 
         self.assertEqual(InventoryWebsiteVisibility.objects.count(), 0)
+
+    def test_toggle_ignores_an_off_site_referer(self):
+        self.client.force_login(self.stock)
+        response = self.client.post(
+            reverse("inventory:toggle", args=["hotel", self.cheap.pk]),
+            HTTP_REFERER="https://evil.example.com/phish",
+        )
+        self.assertRedirects(response, reverse("inventory:hotels"))
+
+    def test_toggle_returns_to_a_same_site_referer(self):
+        self.client.force_login(self.stock)
+        back = reverse("inventory:hotels") + "?q=palm"
+        response = self.client.post(
+            reverse("inventory:toggle", args=["hotel", self.cheap.pk]),
+            HTTP_REFERER=f"http://testserver{back}",
+        )
+        self.assertRedirects(response, f"http://testserver{back}", fetch_redirect_response=False)
+
+    def test_the_search_api_clamps_a_bad_limit(self):
+        self.client.force_login(self.employee)
+        url = reverse("api_inventory:search")
+        for limit in ("abc", "-5", "0"):
+            response = self.client.get(url, {"limit": limit})
+            self.assertEqual(response.status_code, 200, limit)
+        body = self.client.get(url, {"limit": "1"}).json()
+        self.assertEqual(body["data"]["count"], 1)
+        with mock.patch("inventory.selectors.search_inventory", return_value=[]) as search:
+            self.client.get(url, {"limit": "5000"})
+            self.assertEqual(search.call_args.kwargs["limit"], 50)
+            self.client.get(url, {"limit": "abc", "website": "x"})
+            self.assertEqual(search.call_args.kwargs["limit"], 30)
+

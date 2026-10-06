@@ -84,7 +84,7 @@
         </dl>
       </div>
 
-      {% if booking.status != 'cancelled' and booking.status != 'confirmed' %}
+      {% if booking.status != 'cancelled' and booking.status != 'confirmed' and booking.status != 'refunded' %}
         <div class="panel">
           <div class="panel-head"><h3>Cancel</h3></div>
           <form method="post" action="{% url 'bookings:cancel' booking.pk %}"
@@ -102,9 +102,10 @@
 {% block scripts %}
 {% if pending_payment and is_live_gateway %}
 <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+{{ checkout_payload|json_script:"checkout-options" }}
 <script>
   // Hand the order to Razorpay Checkout, then post the signature back for verification.
-  const options = {{ checkout_payload|safe }};
+  const options = JSON.parse(document.getElementById("checkout-options").textContent);
   options.handler = function (response) {
     fetch("{% url 'api_bookings:payment_verify' %}", {
       method: "POST",

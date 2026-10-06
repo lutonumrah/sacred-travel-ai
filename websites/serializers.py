@@ -4,6 +4,8 @@ from .models import Website, WebsiteAPIKey
 
 
 class WebsiteAPIKeySerializer(serializers.ModelSerializer):
+    # `public_key` is embedded in the customer-facing widget anyway; `secret_key`
+    # must never leave the server, so it is deliberately not listed.
     class Meta:
         model = WebsiteAPIKey
         fields = ("id", "key_name", "public_key", "is_active", "last_used_at", "created_at")

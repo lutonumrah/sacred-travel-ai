@@ -3,7 +3,7 @@ from django.shortcuts import get_object_or_404, redirect
 from django.views import View
 from django.views.generic import DetailView, FormView, TemplateView
 
-from core.mixins import AdminRequiredMixin, PageMixin
+from core.mixins import AdminRequiredMixin, SalesRequiredMixin
 from core.selectors import paginate
 from core.services import log_audit
 
@@ -12,7 +12,7 @@ from .forms import AgentReplyForm, AISettingsForm, HandoffForm, InboxFilterForm
 from .models import AISettings, Conversation, ConversationStatus
 
 
-class InboxView(PageMixin, TemplateView):
+class InboxView(SalesRequiredMixin, TemplateView):
     template_name = "conversations/inbox.html"
     page_title = "Live Conversation Inbox"
     page_subtitle = "AI and human chats currently in progress."
@@ -36,7 +36,7 @@ class InboxView(PageMixin, TemplateView):
         return ctx
 
 
-class ConversationHistoryView(PageMixin, TemplateView):
+class ConversationHistoryView(SalesRequiredMixin, TemplateView):
     template_name = "conversations/history.html"
     page_title = "Conversation History"
     page_subtitle = "Every chat, including closed ones."
@@ -59,14 +59,14 @@ class ConversationHistoryView(PageMixin, TemplateView):
         return ctx
 
 
-class ConversationDetailView(PageMixin, DetailView):
+class ConversationDetailView(SalesRequiredMixin, DetailView):
     model = Conversation
     template_name = "conversations/detail.html"
     context_object_name = "conversation"
     active_nav = "conversations"
 
     def get_queryset(self):
-        return Conversation.objects.select_related(
+        return selectors.visible_conversations(self.request.user).select_related(
             "website", "customer", "lead", "assigned_to"
         )
 
@@ -93,9 +93,9 @@ class ConversationDetailView(PageMixin, DetailView):
         return ctx
 
 
-class ConversationReplyView(PageMixin, View):
+class ConversationReplyView(SalesRequiredMixin, View):
     def post(self, request, pk):
-        conversation = get_object_or_404(Conversation, pk=pk)
+        conversation = get_object_or_404(selectors.visible_conversations(request.user), pk=pk)
         form = AgentReplyForm(request.POST)
         if form.is_valid():
             services.agent_reply(
@@ -109,9 +109,9 @@ class ConversationReplyView(PageMixin, View):
         return redirect("conversations:detail", pk=pk)
 
 
-class ConversationTakeOverView(PageMixin, View):
+class ConversationTakeOverView(SalesRequiredMixin, View):
     def post(self, request, pk):
-        conversation = get_object_or_404(Conversation, pk=pk)
+        conversation = get_object_or_404(selectors.visible_conversations(request.user), pk=pk)
         form = HandoffForm(request.POST)
         reason = form.data.get("reason", "")
         services.take_over(
@@ -121,17 +121,17 @@ class ConversationTakeOverView(PageMixin, View):
         return redirect("conversations:detail", pk=pk)
 
 
-class ConversationResumeAIView(PageMixin, View):
+class ConversationResumeAIView(SalesRequiredMixin, View):
     def post(self, request, pk):
-        conversation = get_object_or_404(Conversation, pk=pk)
+        conversation = get_object_or_404(selectors.visible_conversations(request.user), pk=pk)
         services.resume_ai(conversation=conversation, user=request.user, request=request)
         django_messages.success(request, "The AI assistant has resumed this chat.")
         return redirect("conversations:detail", pk=pk)
 
 
-class ConversationCloseView(PageMixin, View):
+class ConversationCloseView(SalesRequiredMixin, View):
     def post(self, request, pk):
-        conversation = get_object_or_404(Conversation, pk=pk)
+        conversation = get_object_or_404(selectors.visible_conversations(request.user), pk=pk)
         services.close_conversation(
             conversation=conversation, user=request.user, request=request
         )
@@ -139,7 +139,7 @@ class ConversationCloseView(PageMixin, View):
         return redirect("conversations:detail", pk=pk)
 
 
-class WidgetPreviewView(PageMixin, TemplateView):
+class WidgetPreviewView(SalesRequiredMixin, TemplateView):
     template_name = "conversations/widget_preview.html"
     page_title = "Chat Widget Preview"
     page_subtitle = "Try the embeddable widget exactly as a customer would see it."

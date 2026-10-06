@@ -3,7 +3,9 @@ import hmac
 import json
 from decimal import Decimal
 
-from django.test import TestCase
+from unittest import mock
+
+from django.test import TestCase, override_settings
 from django.urls import reverse
 
 from accounts.models import User
@@ -12,7 +14,7 @@ from inventory.models import Destination, TourPackage
 from websites.models import Website
 
 from . import payments, services
-from .models import Booking, BookingStatus, Notification, Payment, PaymentStatus
+from .models import Booking, BookingStatus, Notification, Payment, PaymentStatus, WebhookEvent
 
 
 class BookingFixture(TestCase):
@@ -140,7 +142,7 @@ class PaymentFlowTests(BookingFixture):
         self.lead.refresh_from_db()
         self.assertEqual(self.lead.status, LeadStatus.CONVERTED)
 
-    def test_a_bad_signature_marks_the_payment_failed_and_does_not_confirm(self):
+    def test_a_bad_signature_is_rejected_without_touching_the_payment(self):
         booking = self.make_booking()
         payment = services.create_payment_order(booking=booking, actor=self.agent)
 
@@ -152,9 +154,11 @@ class PaymentFlowTests(BookingFixture):
         )
 
         self.assertIsNotNone(error)
-        self.assertEqual(settled.status, PaymentStatus.FAILED)
+        # A forged callback must not kill the customer's real order.
+        settled.refresh_from_db()
+        self.assertEqual(settled.status, PaymentStatus.CREATED)
         booking.refresh_from_db()
-        self.assertNotEqual(booking.status, BookingStatus.CONFIRMED)
+        self.assertEqual(booking.status, BookingStatus.PENDING)
 
     def test_verifying_twice_is_idempotent(self):
         booking = self.make_booking()
@@ -194,25 +198,23 @@ class PaymentFlowTests(BookingFixture):
         )
 
 
-class WebhookTests(BookingFixture):
+class WebhookFixture(BookingFixture):
     def setUp(self):
         super().setUp()
         self.booking = self.make_booking()
         self.payment = services.create_payment_order(booking=self.booking, actor=self.agent)
         self.url = reverse("api_bookings:razorpay_webhook")
 
-    def _post(self, payload, signature=None):
+    def _post(self, payload, signature=None, event_id=None):
         body = json.dumps(payload)
         if signature is None:
             signature = hmac.new(
                 payments.SIMULATION_SECRET.encode(), body.encode(), hashlib.sha256
             ).hexdigest()
-        return self.client.post(
-            self.url,
-            body,
-            content_type="application/json",
-            HTTP_X_RAZORPAY_SIGNATURE=signature,
-        )
+        headers = {"HTTP_X_RAZORPAY_SIGNATURE": signature}
+        if event_id:
+            headers["HTTP_X_RAZORPAY_EVENT_ID"] = event_id
+        return self.client.post(self.url, body, content_type="application/json", **headers)
 
     def _captured(self):
         return {
@@ -223,11 +225,15 @@ class WebhookTests(BookingFixture):
                         "id": "pay_webhook",
                         "order_id": self.payment.razorpay_order_id,
                         "method": "upi",
+                        "amount": payments.to_paise(self.payment.amount),
+                        "currency": self.payment.currency,
                     }
                 }
             },
         }
 
+
+class WebhookTests(WebhookFixture):
     def test_an_unsigned_webhook_is_rejected(self):
         response = self._post(self._captured(), signature="wrong")
         self.assertEqual(response.status_code, 400)
@@ -341,3 +347,334 @@ class BookingViewTests(BookingFixture):
             content_type="application/json",
         )
         self.assertEqual(response.status_code, 400)
+
+    def test_the_verify_api_error_uses_the_error_envelope(self):
+        booking = self.make_booking()
+        payment = services.create_payment_order(booking=booking, actor=self.agent)
+        self.client.force_login(self.agent)
+        body = self.client.post(
+            reverse("api_bookings:payment_verify"),
+            {
+                "razorpay_order_id": payment.razorpay_order_id,
+                "razorpay_payment_id": "pay_x",
+                "razorpay_signature": "forged",
+            },
+            content_type="application/json",
+        ).json()
+        self.assertFalse(body["success"])
+        self.assertEqual(body["error"]["status_code"], 400)
+
+    def test_live_checkout_options_are_rendered_with_json_script(self):
+        self.customer.first_name = "</script><script>alert(1)</script>"
+        self.customer.save()
+        booking = self.make_booking()
+        services.create_payment_order(booking=booking, actor=self.agent)
+        self.client.force_login(self.agent)
+        with mock.patch.object(payments, "is_live", return_value=True):
+            response = self.client.get(reverse("bookings:detail", args=[booking.pk]))
+        self.assertContains(response, 'id="checkout-options"')
+        self.assertNotContains(response, "</script><script>alert(1)")
+
+
+class LiveModeSecretTests(TestCase):
+    def _sign(self, body, secret):
+        return hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+
+    @override_settings(
+        RAZORPAY_KEY_ID="rzp_live_x", RAZORPAY_KEY_SECRET="live-secret", RAZORPAY_WEBHOOK_SECRET=""
+    )
+    def test_live_keys_without_a_webhook_secret_reject_every_webhook(self):
+        body = b'{"event":"payment.captured"}'
+        with self.assertLogs("bookings.payments", level="ERROR"):
+            self.assertFalse(
+                payments.verify_webhook_signature(
+                    body=body, signature=self._sign(body, payments.SIMULATION_SECRET)
+                )
+            )
+        with self.assertLogs("bookings.payments", level="ERROR"):
+            response = self.client.post(
+                reverse("api_bookings:razorpay_webhook"),
+                body,
+                content_type="application/json",
+                HTTP_X_RAZORPAY_SIGNATURE=self._sign(body, payments.SIMULATION_SECRET),
+            )
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(response.json()["success"])
+
+    @override_settings(
+        RAZORPAY_KEY_ID="rzp_live_x", RAZORPAY_KEY_SECRET="live-secret", RAZORPAY_WEBHOOK_SECRET="wh"
+    )
+    def test_a_configured_webhook_secret_is_used(self):
+        body = b'{"event":"payment.captured"}'
+        self.assertTrue(
+            payments.verify_webhook_signature(body=body, signature=self._sign(body, "wh"))
+        )
+        self.assertFalse(
+            payments.verify_webhook_signature(
+                body=body, signature=self._sign(body, payments.SIMULATION_SECRET)
+            )
+        )
+
+    @override_settings(RAZORPAY_KEY_ID="rzp_live_x", RAZORPAY_KEY_SECRET="")
+    def test_a_key_id_without_its_secret_never_accepts_the_simulation_signature(self):
+        signature = hmac.new(
+            payments.SIMULATION_SECRET.encode(), b"order_1|pay_1", hashlib.sha256
+        ).hexdigest()
+        with self.assertLogs("bookings.payments", level="ERROR"):
+            self.assertFalse(
+                payments.verify_payment_signature(
+                    order_id="order_1", payment_id="pay_1", signature=signature
+                )
+            )
+
+
+class PaymentHardeningTests(WebhookFixture):
+    def _event(self, name, **entity):
+        payload = self._captured()
+        payload["event"] = name
+        payload["payload"]["payment"]["entity"].update(entity)
+        return payload
+
+    def test_a_captured_amount_mismatch_does_not_confirm(self):
+        Notification.objects.all().delete()
+        response = self._post(self._event("payment.captured", amount=100))
+        self.assertIn("amount mismatch", response.json()["data"]["result"])
+        self.payment.refresh_from_db()
+        self.booking.refresh_from_db()
+        self.assertNotEqual(self.payment.status, PaymentStatus.SUCCESS)
+        self.assertEqual(self.booking.status, BookingStatus.PENDING)
+        self.assertTrue(
+            Notification.objects.filter(
+                recipient=self.manager, title__icontains="mismatch"
+            ).exists()
+        )
+
+    def test_a_currency_mismatch_does_not_confirm(self):
+        self._post(self._event("payment.captured", currency="USD"))
+        self.booking.refresh_from_db()
+        self.assertEqual(self.booking.status, BookingStatus.PENDING)
+
+    def test_order_paid_confirms_like_captured_and_is_idempotent(self):
+        self._post(self._event("order.paid"))
+        self.booking.refresh_from_db()
+        self.assertEqual(self.booking.status, BookingStatus.CONFIRMED)
+        confirmed_at = self.booking.confirmed_at
+        self._post(self._captured())
+        self.assertEqual(Booking.objects.get(pk=self.booking.pk).confirmed_at, confirmed_at)
+
+    def test_a_late_failed_event_does_not_downgrade_a_confirmed_booking(self):
+        self._post(self._captured())
+        self._post(self._event("payment.failed", id="pay_retry", error_description="Declined"))
+        self.payment.refresh_from_db()
+        self.booking.refresh_from_db()
+        self.assertEqual(self.payment.status, PaymentStatus.SUCCESS)
+        self.assertEqual(self.booking.status, BookingStatus.CONFIRMED)
+
+    def test_a_repeated_event_id_is_processed_once(self):
+        self._post(self._captured(), event_id="evt_1")
+        # Same id, different body: Razorpay re-delivering must not be re-applied.
+        response = self._post(
+            self._event("payment.failed", error_description="Declined"), event_id="evt_1"
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("duplicate", response.json()["data"]["result"])
+        self.assertEqual(WebhookEvent.objects.filter(event_id="evt_1").count(), 1)
+        self.booking.refresh_from_db()
+        self.assertEqual(self.booking.status, BookingStatus.CONFIRMED)
+
+    def _refund(self, amount=None, refund_status="full"):
+        payload = self._event("refund.processed", refund_status=refund_status)
+        payload["payload"]["refund"] = {
+            "entity": {
+                "id": "rfnd_1",
+                "payment_id": "pay_webhook",
+                "amount": amount if amount is not None else payments.to_paise(self.payment.amount),
+            }
+        }
+        return payload
+
+    def test_a_full_refund_refunds_the_booking_and_loses_the_lead(self):
+        self._post(self._captured())
+        Notification.objects.all().delete()
+        response = self._post(self._refund())
+        self.assertEqual(response.json()["data"]["result"], "refund recorded")
+        self.payment.refresh_from_db()
+        self.booking.refresh_from_db()
+        self.lead.refresh_from_db()
+        self.assertEqual(self.payment.status, PaymentStatus.REFUNDED)
+        self.assertEqual(self.booking.status, BookingStatus.REFUNDED)
+        self.assertEqual(self.lead.status, LeadStatus.LOST)
+        self.assertTrue(
+            Notification.objects.filter(
+                recipient=self.manager, title__startswith="Booking refunded"
+            ).exists()
+        )
+
+    def test_a_partial_refund_keeps_the_booking_confirmed(self):
+        self._post(self._captured())
+        self._post(self._refund(amount=100, refund_status="partial"))
+        self.payment.refresh_from_db()
+        self.booking.refresh_from_db()
+        self.assertEqual(self.payment.status, PaymentStatus.SUCCESS)
+        self.assertEqual(self.booking.status, BookingStatus.CONFIRMED)
+
+    def test_a_refund_event_found_by_payment_id_alone(self):
+        self._post(self._captured())
+        payload = self._refund()
+        del payload["payload"]["payment"]
+        self._post(payload)
+        self.booking.refresh_from_db()
+        self.assertEqual(self.booking.status, BookingStatus.REFUNDED)
+
+
+class CheckoutVerifyLiveTests(BookingFixture):
+    def setUp(self):
+        super().setUp()
+        self.booking = self.make_booking()
+        self.payment = services.create_payment_order(booking=self.booking, actor=self.agent)
+        self.payment_id, self.signature = payments.simulate_payment(
+            self.payment.razorpay_order_id
+        )
+
+    def _verify(self, gateway):
+        with mock.patch.object(payments, "fetch_payment", return_value=gateway):
+            return services.verify_payment(
+                order_id=self.payment.razorpay_order_id,
+                payment_id=self.payment_id,
+                signature=self.signature,
+            )
+
+    def test_a_gateway_amount_mismatch_does_not_confirm(self):
+        _payment, error = self._verify(
+            {
+                "order_id": self.payment.razorpay_order_id,
+                "amount": 100,
+                "currency": "INR",
+                "status": "captured",
+            }
+        )
+        self.assertIsNotNone(error)
+        self.booking.refresh_from_db()
+        self.assertEqual(self.booking.status, BookingStatus.PENDING)
+
+    def test_a_matching_captured_gateway_payment_confirms(self):
+        _payment, error = self._verify(
+            {
+                "order_id": self.payment.razorpay_order_id,
+                "amount": payments.to_paise(self.payment.amount),
+                "currency": "INR",
+                "status": "captured",
+            }
+        )
+        self.assertIsNone(error)
+        self.booking.refresh_from_db()
+        self.assertEqual(self.booking.status, BookingStatus.CONFIRMED)
+
+
+class CancelBookingTests(BookingFixture):
+    def test_cancelling_closes_open_payments_and_reopens_the_lead(self):
+        booking = self.make_booking()
+        payment = services.create_payment_order(booking=booking, actor=self.agent)
+        Notification.objects.all().delete()
+
+        services.cancel_booking(booking=booking, actor=self.manager, reason="Changed plans")
+
+        payment.refresh_from_db()
+        self.lead.refresh_from_db()
+        self.assertEqual(payment.status, PaymentStatus.CANCELLED)
+        self.assertEqual(self.lead.status, LeadStatus.INTERESTED)
+        # The agent who raised it hears about it; the cancelling manager does not.
+        self.assertTrue(Notification.objects.filter(recipient=self.agent).exists())
+        self.assertFalse(Notification.objects.filter(recipient=self.manager).exists())
+
+    def test_a_payment_after_cancellation_does_not_revive_the_booking(self):
+        booking = self.make_booking()
+        payment = services.create_payment_order(booking=booking, actor=self.agent)
+        services.cancel_booking(booking=booking, actor=self.manager)
+        payment_id, signature = payments.simulate_payment(payment.razorpay_order_id)
+
+        services.verify_payment(
+            order_id=payment.razorpay_order_id, payment_id=payment_id, signature=signature
+        )
+
+        booking.refresh_from_db()
+        payment.refresh_from_db()
+        self.assertEqual(booking.status, BookingStatus.CANCELLED)
+        self.assertEqual(payment.status, PaymentStatus.SUCCESS)
+        self.assertTrue(
+            Notification.objects.filter(
+                recipient=self.manager, title__startswith="Payment received for cancelled"
+            ).exists()
+        )
+
+
+class BookingAccessTests(BookingFixture):
+    def setUp(self):
+        super().setUp()
+        self.other = User.objects.create_user("other", password="pw", role="employee")
+        self.lead.assigned_to = self.other
+        self.lead.save()
+        # Raised by the other employee for their own lead.
+        booking = Booking(
+            website=self.website,
+            customer=self.customer,
+            lead=self.lead,
+            product_type="package",
+            product_id=self.package.pk,
+            product_name=self.package.name,
+            subtotal=Decimal("1000"),
+        )
+        self.booking = services.create_booking(booking=booking, actor=self.other)
+        self.payment = services.create_payment_order(booking=self.booking, actor=self.other)
+
+    def test_an_employee_gets_404_on_someone_elses_booking(self):
+        self.client.force_login(self.agent)
+        self.assertEqual(
+            self.client.get(reverse("bookings:detail", args=[self.booking.pk])).status_code, 404
+        )
+        self.assertEqual(
+            self.client.post(reverse("bookings:payment_create", args=[self.booking.pk])).status_code,
+            404,
+        )
+        self.assertEqual(
+            self.client.get(reverse("api_bookings:detail", args=[self.booking.pk])).status_code,
+            404,
+        )
+
+    def test_the_owner_and_managers_can_open_it(self):
+        for user in (self.other, self.manager):
+            self.client.force_login(user)
+            response = self.client.get(reverse("bookings:detail", args=[self.booking.pk]))
+            self.assertEqual(response.status_code, 200)
+
+    def test_payment_apis_hide_other_employees_bookings(self):
+        self.client.force_login(self.agent)
+        response = self.client.post(
+            reverse("api_bookings:payment_create"),
+            {"booking_id": self.booking.pk},
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 404)
+        payment_id, signature = payments.simulate_payment(self.payment.razorpay_order_id)
+        response = self.client.post(
+            reverse("api_bookings:payment_verify"),
+            {
+                "razorpay_order_id": self.payment.razorpay_order_id,
+                "razorpay_payment_id": payment_id,
+                "razorpay_signature": signature,
+            },
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 404)
+        self.assertFalse(response.json()["success"])
+        self.booking.refresh_from_db()
+        self.assertEqual(self.booking.status, BookingStatus.PENDING)
+
+    def test_the_inventory_role_cannot_reach_bookings(self):
+        stock = User.objects.create_user("stock", password="pw", role="inventory")
+        self.client.force_login(stock)
+        self.assertRedirects(
+            self.client.get(reverse("bookings:list")), reverse("dashboard:overview")
+        )
+        self.assertEqual(self.client.get(reverse("api_bookings:list")).status_code, 403)
+

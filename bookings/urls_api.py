@@ -6,10 +6,10 @@ from rest_framework import generics
 from rest_framework.permissions import AllowAny
 from rest_framework.views import APIView
 
-from core.api import EnvelopeMixin, SuccessResponse
+from core.api import EnvelopeMixin, ErrorResponse, SuccessResponse
+from core.permissions import IsSalesTeam
 
 from . import payments, selectors, services
-from .models import Booking
 from .serializers import (
     BookingSerializer,
     PaymentCreateSerializer,
@@ -23,6 +23,7 @@ app_name = "api_bookings"
 
 
 class BookingListAPI(EnvelopeMixin, generics.ListAPIView):
+    permission_classes = [IsSalesTeam]
     serializer_class = BookingSerializer
 
     def get_queryset(self):
@@ -35,6 +36,7 @@ class BookingListAPI(EnvelopeMixin, generics.ListAPIView):
 
 
 class BookingDetailAPI(EnvelopeMixin, generics.RetrieveAPIView):
+    permission_classes = [IsSalesTeam]
     serializer_class = BookingSerializer
 
     def get_queryset(self):
@@ -44,11 +46,13 @@ class BookingDetailAPI(EnvelopeMixin, generics.RetrieveAPIView):
 class PaymentCreateAPI(APIView):
     """Open a Razorpay order for a booking and return the checkout parameters."""
 
+    permission_classes = [IsSalesTeam]
+
     def post(self, request):
         serializer = PaymentCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         booking = generics.get_object_or_404(
-            Booking, pk=serializer.validated_data["booking_id"]
+            selectors.visible_bookings(request.user), pk=serializer.validated_data["booking_id"]
         )
         payment = services.create_payment_order(
             booking=booking, actor=request.user, request=request
@@ -73,10 +77,17 @@ class PaymentCreateAPI(APIView):
 class PaymentVerifyAPI(APIView):
     """Verify the signature Razorpay Checkout returns to the browser."""
 
+    permission_classes = [IsSalesTeam]
+
     def post(self, request):
         serializer = PaymentVerifySerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
+        visible = selectors.visible_bookings(request.user).filter(
+            payments__razorpay_order_id=data["razorpay_order_id"]
+        )
+        if not visible.exists():
+            return ErrorResponse("No payment matches that order.", status_code=404)
         payment, error = services.verify_payment(
             order_id=data["razorpay_order_id"],
             payment_id=data["razorpay_payment_id"],
@@ -85,10 +96,12 @@ class PaymentVerifyAPI(APIView):
             request=request,
         )
         if error:
-            return SuccessResponse(
-                {"payment": PaymentSerializer(payment).data if payment else None},
-                message=error,
-                status_code=400,
+            return ErrorResponse(
+                error,
+                detail={
+                    "message": error,
+                    "payment": PaymentSerializer(payment).data if payment else None,
+                },
             )
         return SuccessResponse(
             {
@@ -109,15 +122,20 @@ class RazorpayWebhookAPI(APIView):
         signature = request.headers.get("X-Razorpay-Signature", "")
         if not payments.verify_webhook_signature(body=request.body, signature=signature):
             logger.warning("Rejected a Razorpay webhook with an invalid signature.")
-            return SuccessResponse(None, message="Invalid signature.", status_code=400)
+            return ErrorResponse("Invalid signature.")
 
         try:
             payload = json.loads(request.body.decode() or "{}")
-        except json.JSONDecodeError:
-            return SuccessResponse(None, message="Malformed payload.", status_code=400)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return ErrorResponse("Malformed payload.")
+        if not isinstance(payload, dict):
+            return ErrorResponse("Malformed payload.")
 
-        result = services.handle_webhook(
-            event=payload.get("event", ""), payload=payload, request=request
+        result = services.process_webhook(
+            event_id=request.headers.get("X-Razorpay-Event-Id", ""),
+            event=str(payload.get("event", "")),
+            payload=payload,
+            request=request,
         )
         return SuccessResponse({"result": result}, message="Webhook processed.")
 

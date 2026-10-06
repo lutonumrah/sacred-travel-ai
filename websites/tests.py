@@ -90,3 +90,29 @@ class WebsiteViewTests(TestCase):
         self.client.force_login(User.objects.create_user("emp", password="pw", role="employee"))
         response = self.client.get(reverse("websites:create"))
         self.assertRedirects(response, reverse("dashboard:overview"))
+
+
+class WebsiteAPITests(TestCase):
+    def setUp(self):
+        self.website = Website.objects.create(
+            name="Main", domain="main.com", source_identifier="main"
+        )
+        self.key = issue_api_key(website=self.website)
+
+    def test_only_managers_can_list_websites(self):
+        employee = User.objects.create_user("emp", password="pw", role="employee")
+        self.client.force_login(employee)
+        self.assertEqual(self.client.get(reverse("api_websites:list")).status_code, 403)
+        self.assertEqual(
+            self.client.get(reverse("api_websites:detail", args=[self.website.pk])).status_code,
+            403,
+        )
+
+    def test_the_secret_key_is_never_serialised(self):
+        manager = User.objects.create_user("mgr", password="pw", role="manager")
+        self.client.force_login(manager)
+        response = self.client.get(reverse("api_websites:list"))
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("secret_key", response.content.decode())
+        self.assertNotIn(self.key.secret_key, response.content.decode())
+

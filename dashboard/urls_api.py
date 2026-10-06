@@ -5,6 +5,7 @@ from rest_framework.views import APIView
 from bookings import selectors as booking_selectors
 from bookings.serializers import NotificationSerializer
 from core.api import EnvelopeMixin, SuccessResponse
+from core.permissions import IsManager
 
 from . import selectors, services
 
@@ -40,6 +41,8 @@ class NotificationsAPI(EnvelopeMixin, generics.ListAPIView):
 
 
 class ReportsAPI(APIView):
+    permission_classes = [IsManager]
+
     def get(self, request):
         days = _days(request)
         return SuccessResponse(
@@ -57,6 +60,8 @@ class ReportsAPI(APIView):
 
 
 class AnalyticsAPI(APIView):
+    permission_classes = [IsManager]
+
     def get(self, request):
         days = _days(request, 90)
         return SuccessResponse(

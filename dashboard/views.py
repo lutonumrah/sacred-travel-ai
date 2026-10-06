@@ -47,7 +47,7 @@ class OverviewView(PageMixin, TemplateView):
         ctx["leads_by_day"] = selectors.leads_by_day(days=days, website=website)
         ctx["leads_by_status"] = selectors.leads_by_status(website=website)
         ctx["pipeline"] = crm_selectors.lead_status_counts(website=website)
-        ctx["activity"] = selectors.recent_activity()
+        ctx["activity"] = selectors.recent_activity(user=self.request.user)
         ctx["websites"] = list_websites(status="active")
         ctx["selected_website"] = website
         ctx["days"] = days

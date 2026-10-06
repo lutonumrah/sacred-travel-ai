@@ -279,3 +279,28 @@ class APITests(DashboardFixture):
         response = self.client.get(reverse("api_crm:lead_detail", args=[99999]))
         self.assertEqual(response.status_code, 404)
         self.assertFalse(response.json()["success"])
+
+    def test_reports_and_analytics_apis_are_manager_only(self):
+        for name in ("api_dashboard:reports", "api_dashboard:analytics"):
+            self.client.force_login(self.agent)
+            response = self.client.get(reverse(name))
+            self.assertEqual(response.status_code, 403, name)
+            self.assertFalse(response.json()["success"])
+            self.client.force_login(self.manager)
+            self.assertEqual(self.client.get(reverse(name)).status_code, 200, name)
+
+    def test_the_sidebar_matches_each_role(self):
+        self.client.force_login(self.agent)
+        page = self.client.get(reverse("dashboard:overview"))
+        self.assertNotContains(page, reverse("dashboard:reports"))
+        self.assertContains(page, reverse("crm:leads"))
+
+        stock = User.objects.create_user("stock", password="pw", role="inventory")
+        self.client.force_login(stock)
+        page = self.client.get(reverse("dashboard:overview"))
+        for name in ("crm:leads", "conversations:inbox", "bookings:list"):
+            self.assertNotContains(page, f'href="{reverse(name)}"')
+
+        self.client.force_login(self.manager)
+        self.assertContains(self.client.get(reverse("dashboard:overview")), reverse("dashboard:reports"))
+

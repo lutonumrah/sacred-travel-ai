@@ -85,3 +85,17 @@ class TeamTests(TestCase):
         self.client.force_login(admin)
         response = self.client.get(reverse("accounts:teams"))
         self.assertContains(response, "Sales")
+
+
+class UserAPITests(TestCase):
+    def test_only_admins_can_list_users(self):
+        manager = User.objects.create_user("mgr", password="pw", role="manager")
+        admin = User.objects.create_user("adm", password="pw", role="admin")
+        for user, expected in ((manager, 403), (admin, 200)):
+            self.client.force_login(user)
+            self.assertEqual(self.client.get(reverse("api_accounts:users")).status_code, expected)
+            self.assertEqual(
+                self.client.get(reverse("api_accounts:user_detail", args=[admin.pk])).status_code,
+                expected,
+            )
+

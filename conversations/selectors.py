@@ -3,8 +3,20 @@ from django.db.models import Count, Max, Q
 from .models import Conversation, ConversationStatus
 
 
+def visible_conversations(user):
+    """Managers see every chat; employees their own and unassigned ones.
+
+    Unassigned includes waiting chats, so any employee can open one to take it over.
+    """
+    queryset = Conversation.objects.all()
+    if not (user.is_superuser or user.is_manager):
+        queryset = queryset.filter(Q(assigned_to=user) | Q(assigned_to__isnull=True))
+    return queryset
+
+
 def list_conversations(*, status="", website=None, assigned_to=None, q="", user=None):
-    queryset = Conversation.objects.select_related(
+    base = visible_conversations(user) if user is not None else Conversation.objects.all()
+    queryset = base.select_related(
         "website", "customer", "lead", "assigned_to"
     ).annotate(message_count=Count("messages"), latest=Max("messages__created_at")).order_by(
         "-last_message_at", "-created_at"
@@ -23,8 +35,6 @@ def list_conversations(*, status="", website=None, assigned_to=None, q="", user=
             | Q(customer__email__icontains=q)
             | Q(messages__content__icontains=q)
         ).distinct()
-    if user is not None and not (user.is_superuser or user.is_manager):
-        queryset = queryset.filter(Q(assigned_to=user) | Q(assigned_to__isnull=True))
     return queryset
 
 

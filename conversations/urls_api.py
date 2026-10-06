@@ -3,7 +3,8 @@ from rest_framework import generics
 from rest_framework.permissions import AllowAny
 from rest_framework.views import APIView
 
-from core.api import EnvelopeMixin, SuccessResponse
+from core.api import EnvelopeMixin, ErrorResponse, SuccessResponse
+from core.permissions import IsSalesTeam
 from websites.selectors import active_key_for
 from websites.services import touch_api_key
 
@@ -20,6 +21,7 @@ app_name = "api_conversations"
 
 
 class InboxAPI(EnvelopeMixin, generics.ListAPIView):
+    permission_classes = [IsSalesTeam]
     serializer_class = ConversationSerializer
 
     def get_queryset(self):
@@ -31,10 +33,11 @@ class InboxAPI(EnvelopeMixin, generics.ListAPIView):
 
 
 class ConversationDetailAPI(EnvelopeMixin, generics.RetrieveAPIView):
+    permission_classes = [IsSalesTeam]
     serializer_class = ConversationDetailSerializer
 
     def get_queryset(self):
-        return Conversation.objects.prefetch_related(
+        return selectors.visible_conversations(self.request.user).prefetch_related(
             "messages", "recommendations", "handoffs"
         )
 
@@ -42,8 +45,12 @@ class ConversationDetailAPI(EnvelopeMixin, generics.RetrieveAPIView):
 class HandoffAPI(APIView):
     """Take over a chat, or hand it back to the AI."""
 
+    permission_classes = [IsSalesTeam]
+
     def post(self, request, pk):
-        conversation = generics.get_object_or_404(Conversation, pk=pk)
+        conversation = generics.get_object_or_404(
+            selectors.visible_conversations(request.user), pk=pk
+        )
         action = request.data.get("action", "take_over")
         if action == "resume_ai":
             services.resume_ai(conversation=conversation, user=request.user, request=request)
@@ -77,20 +84,16 @@ class WidgetChatAPI(APIView):
     def post(self, request):
         form = WidgetChatForm(request.data)
         if not form.is_valid():
-            return SuccessResponse(
-                {"errors": form.errors}, message="Invalid request.", status_code=400
-            )
+            return ErrorResponse("Invalid request.", detail=form.errors)
 
         data = form.cleaned_data
         api_key = active_key_for(data["key"])
         if api_key is None:
-            return SuccessResponse(
-                None, message="Unknown or inactive widget key.", status_code=403
-            )
+            return ErrorResponse("Unknown or inactive widget key.", status_code=403)
         website = api_key.website
         if not website.widget_enabled:
-            return SuccessResponse(
-                None, message="The chat widget is disabled for this website.", status_code=403
+            return ErrorResponse(
+                "The chat widget is disabled for this website.", status_code=403
             )
         touch_api_key(api_key)
 
@@ -101,9 +104,7 @@ class WidgetChatAPI(APIView):
         )
         if conversation.website_id != website.pk:
             # A session key from another website must not be reused.
-            return SuccessResponse(
-                None, message="Session does not belong to this website.", status_code=403
-            )
+            return ErrorResponse("Session does not belong to this website.", status_code=403)
 
         # Any contact details the host page collected up front.
         provided = {
@@ -156,16 +157,16 @@ class WidgetChatAPI(APIView):
         session = request.query_params.get("session", "")
         api_key = active_key_for(key)
         if api_key is None or not session:
-            return SuccessResponse(None, message="Unknown widget key.", status_code=403)
+            return ErrorResponse("Unknown widget key.", status_code=403)
         conversation = Conversation.objects.filter(
             session_key=session, website=api_key.website
         ).first()
         if conversation is None:
-            return SuccessResponse(None, message="Unknown session.", status_code=404)
+            return ErrorResponse("Unknown session.", status_code=404)
         messages = conversation.messages.filter(is_internal=False)
-        since = request.query_params.get("since")
-        if since:
-            messages = messages.filter(pk__gt=since)
+        since = request.query_params.get("since", "")
+        if since.isdigit():
+            messages = messages.filter(pk__gt=int(since))
         return SuccessResponse(
             {
                 "status": conversation.status,

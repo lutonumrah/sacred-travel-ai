@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import Booking, Notification, Payment
+from .models import Booking, Notification, Payment, WebhookEvent
 
 
 class PaymentInline(admin.TabularInline):
@@ -41,3 +41,10 @@ class NotificationAdmin(admin.ModelAdmin):
     list_display = ("title", "recipient", "notification_type", "is_read", "created_at")
     list_filter = ("notification_type", "is_read")
     search_fields = ("title", "body")
+
+
+@admin.register(WebhookEvent)
+class WebhookEventAdmin(admin.ModelAdmin):
+    list_display = ("event_id", "event", "result", "created_at")
+    search_fields = ("event_id", "event")
+    readonly_fields = ("event_id", "event", "result", "created_at", "updated_at")

@@ -16,6 +16,16 @@ from .serializers import (
 
 app_name = "api_inventory"
 
+SEARCH_LIMIT_DEFAULT = 30
+SEARCH_LIMIT_MAX = 50
+
+
+def _search_limit(raw):
+    try:
+        return max(1, min(int(raw), SEARCH_LIMIT_MAX))
+    except (TypeError, ValueError):
+        return SEARCH_LIMIT_DEFAULT
+
 
 class DestinationListAPI(EnvelopeMixin, generics.ListAPIView):
     serializer_class = DestinationSerializer
@@ -75,7 +85,7 @@ class InventorySearchAPI(APIView):
 
         params = request.query_params
         website = None
-        if params.get("website"):
+        if params.get("website", "").isdigit():
             website = list_websites().filter(pk=params["website"]).first()
         results = selectors.search_inventory(
             q=params.get("q", ""),
@@ -84,7 +94,7 @@ class InventorySearchAPI(APIView):
             min_price=params.get("min_price"),
             max_price=params.get("max_price"),
             website=website,
-            limit=int(params.get("limit", 30)),
+            limit=_search_limit(params.get("limit", SEARCH_LIMIT_DEFAULT)),
         )
         return SuccessResponse(
             {

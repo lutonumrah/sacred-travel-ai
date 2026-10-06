@@ -411,6 +411,25 @@ class WidgetAPITests(TestCase):
         response = self.post({"key": "pk_nope", "message": "hi"})
         self.assertEqual(response.status_code, 403)
 
+    def test_widget_errors_use_the_error_envelope(self):
+        body = self.post({"key": "pk_nope", "message": "hi"}).json()
+        self.assertFalse(body["success"])
+        self.assertEqual(body["error"]["status_code"], 403)
+        # The widget shows this text to the visitor.
+        self.assertEqual(body["message"], "Unknown or inactive widget key.")
+
+        response = self.post({"message": "hi"})
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(response.json()["success"])
+        self.assertIn("key", response.json()["error"]["detail"])
+
+    def test_polling_with_a_bad_since_value_does_not_crash(self):
+        session = self.post({"key": self.key.public_key, "message": "hi"}).json()["data"]["session"]
+        response = self.client.get(
+            self.url, {"key": self.key.public_key, "session": session, "since": "abc"}
+        )
+        self.assertEqual(response.status_code, 200)
+
     def test_a_revoked_key_is_rejected(self):
         self.key.is_active = False
         self.key.save()
@@ -663,3 +682,69 @@ class AISettingsPageTests(TestCase):
         entry = AuditLog.objects.get(action="ai_settings.update")
         self.assertEqual(entry.metadata["keys_changed"], ["gemini_api_key"])
         self.assertNotIn("AIza-secret", json.dumps(entry.metadata))
+
+
+class ConversationAccessTests(TestCase):
+    def setUp(self):
+        self.website = Website.objects.create(
+            name="Main", domain="main.com", source_identifier="main"
+        )
+        self.agent = User.objects.create_user("agent", password="pw", role="employee")
+        self.other = User.objects.create_user("other", password="pw", role="employee")
+        self.manager = User.objects.create_user("mgr", password="pw", role="manager")
+        self.theirs, _ = services.start_conversation(website=self.website)
+        services.take_over(conversation=self.theirs, user=self.other)
+        self.client.force_login(self.agent)
+
+    def test_every_chat_page_and_action_404s_on_another_employees_chat(self):
+        pk = self.theirs.pk
+        self.assertEqual(
+            self.client.get(reverse("conversations:detail", args=[pk])).status_code, 404
+        )
+        for name in ("conversations:take_over", "conversations:resume_ai", "conversations:close"):
+            self.assertEqual(self.client.post(reverse(name, args=[pk])).status_code, 404, name)
+        response = self.client.post(
+            reverse("conversations:reply", args=[pk]), {"content": "Hijack"}
+        )
+        self.assertEqual(response.status_code, 404)
+        self.theirs.refresh_from_db()
+        self.assertEqual(self.theirs.assigned_to, self.other)
+        self.assertEqual(self.theirs.status, ConversationStatus.HUMAN_ACTIVE)
+
+    def test_the_apis_are_scoped_too(self):
+        pk = self.theirs.pk
+        self.assertEqual(
+            self.client.get(reverse("api_conversations:detail", args=[pk])).status_code, 404
+        )
+        response = self.client.post(
+            reverse("api_conversations:handoff", args=[pk]),
+            {"action": "take_over"},
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 404)
+        self.theirs.refresh_from_db()
+        self.assertEqual(self.theirs.assigned_to, self.other)
+
+    def test_an_unassigned_waiting_chat_can_be_opened_and_taken_over(self):
+        waiting, _ = services.start_conversation(website=self.website)
+        Conversation.objects.filter(pk=waiting.pk).update(status=ConversationStatus.WAITING)
+        self.assertEqual(
+            self.client.get(reverse("conversations:detail", args=[waiting.pk])).status_code, 200
+        )
+        self.client.post(reverse("conversations:take_over", args=[waiting.pk]))
+        waiting.refresh_from_db()
+        self.assertEqual(waiting.assigned_to, self.agent)
+
+    def test_managers_can_open_any_chat(self):
+        self.client.force_login(self.manager)
+        response = self.client.get(reverse("conversations:detail", args=[self.theirs.pk]))
+        self.assertEqual(response.status_code, 200)
+
+    def test_the_inventory_role_cannot_reach_conversations(self):
+        stock = User.objects.create_user("stock", password="pw", role="inventory")
+        self.client.force_login(stock)
+        self.assertRedirects(
+            self.client.get(reverse("conversations:inbox")), reverse("dashboard:overview")
+        )
+        self.assertEqual(self.client.get(reverse("api_conversations:inbox")).status_code, 403)
+

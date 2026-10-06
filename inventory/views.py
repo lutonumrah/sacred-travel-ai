@@ -1,6 +1,7 @@
 from django.contrib import messages
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse_lazy
+from django.utils.http import url_has_allowed_host_and_scheme
 from django.views import View
 from django.views.generic import CreateView, DeleteView, DetailView, TemplateView, UpdateView
 
@@ -262,7 +263,13 @@ class InventoryToggleView(InventoryEditorMixin, View):
             services.toggle_active(obj=obj, actor=request.user, request=request, kind=kind)
             state = "activated" if obj.is_active else "deactivated"
             messages.success(request, f"{obj.name} {state}.")
-        return redirect(request.META.get("HTTP_REFERER", "/inventory/hotels/"))
+        # Only bounce back to a page on this site; the Referer header is client-controlled.
+        referer = request.META.get("HTTP_REFERER", "")
+        if url_has_allowed_host_and_scheme(
+            referer, allowed_hosts={request.get_host()}, require_https=request.is_secure()
+        ):
+            return redirect(referer)
+        return redirect(_LIST_ROUTE.get(kind, "inventory:hotels"))
 
 
 class VisibilityView(PageMixin, TemplateView):

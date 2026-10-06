@@ -4,8 +4,21 @@ from django.utils import timezone
 from .models import Booking, BookingStatus, Notification, Payment, PaymentStatus
 
 
+def visible_bookings(user):
+    """Managers see every booking; employees ones they raised or whose lead they can see."""
+    from crm.selectors import sees_everything, visible_leads
+
+    queryset = Booking.objects.all()
+    if not sees_everything(user):
+        queryset = queryset.filter(
+            Q(created_by=user) | Q(lead__in=visible_leads(user).values("pk"))
+        )
+    return queryset
+
+
 def list_bookings(*, q="", status="", website=None, date_from=None, date_to=None, user=None):
-    queryset = Booking.objects.select_related("customer", "website", "lead", "created_by")
+    base = visible_bookings(user) if user is not None else Booking.objects.all()
+    queryset = base.select_related("customer", "website", "lead", "created_by")
     if q:
         queryset = queryset.filter(
             Q(booking_number__icontains=q)
@@ -22,13 +35,13 @@ def list_bookings(*, q="", status="", website=None, date_from=None, date_to=None
         queryset = queryset.filter(created_at__date__gte=date_from)
     if date_to:
         queryset = queryset.filter(created_at__date__lte=date_to)
-    if user is not None and not (user.is_superuser or user.is_manager):
-        queryset = queryset.filter(Q(created_by=user) | Q(lead__assigned_to=user))
     return queryset
 
 
-def list_payments(*, status="", q=""):
+def list_payments(*, status="", q="", user=None):
     queryset = Payment.objects.select_related("booking", "booking__customer")
+    if user is not None:
+        queryset = queryset.filter(booking__in=visible_bookings(user).values("pk"))
     if status:
         queryset = queryset.filter(status=status)
     if q:

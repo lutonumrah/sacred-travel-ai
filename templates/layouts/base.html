@@ -28,6 +28,7 @@
           <a href="{% url 'inventory:visibility' %}">Visibility</a>
           <a href="{% url 'inventory:search' %}">Search</a>
         </details>
+        {% if user.is_superuser or user.role != 'inventory' %}
         <details {% if active_nav == 'crm' %}open class="active"{% endif %}>
           <summary>CRM</summary>
           <a href="{% url 'crm:customers' %}">Customers</a>
@@ -40,12 +41,15 @@
           {% if waiting_chats %}<span class="nav-count">{{ waiting_chats }}</span>{% endif %}
         </a>
         <a href="{% url 'bookings:list' %}" class="{% if active_nav == 'bookings' %}active{% endif %}">Bookings</a>
+        {% endif %}
         <a href="{% url 'dashboard:notifications' %}" class="{% if active_nav == 'notifications' %}active{% endif %}">
           Notifications
           {% if unread_notifications %}<span class="nav-count">{{ unread_notifications }}</span>{% endif %}
         </a>
-        <a href="{% url 'dashboard:reports' %}" class="{% if active_nav == 'reports' %}active{% endif %}">Reports</a>
-        <a href="{% url 'dashboard:analytics' %}" class="{% if active_nav == 'analytics' %}active{% endif %}">Analytics</a>
+        {% if user.is_manager %}
+          <a href="{% url 'dashboard:reports' %}" class="{% if active_nav == 'reports' %}active{% endif %}">Reports</a>
+          <a href="{% url 'dashboard:analytics' %}" class="{% if active_nav == 'analytics' %}active{% endif %}">Analytics</a>
+        {% endif %}
         {% if user.is_admin %}
           <a href="{% url 'accounts:users' %}" class="{% if active_nav == 'users' %}active{% endif %}">Users &amp; Roles</a>
           <a href="{% url 'conversations:ai_settings' %}" class="{% if active_nav == 'ai_settings' %}active{% endif %}">AI Settings</a>

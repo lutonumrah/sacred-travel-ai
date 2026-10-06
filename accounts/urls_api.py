@@ -2,6 +2,7 @@ from django.urls import path
 from rest_framework import generics
 
 from core.api import EnvelopeMixin
+from core.permissions import IsAdmin
 from core.views import HealthCheckAPIView
 
 from . import selectors
@@ -11,6 +12,7 @@ app_name = "api_accounts"
 
 
 class UserListAPI(EnvelopeMixin, generics.ListAPIView):
+    permission_classes = [IsAdmin]
     serializer_class = UserSerializer
 
     def get_queryset(self):
@@ -23,6 +25,7 @@ class UserListAPI(EnvelopeMixin, generics.ListAPIView):
 
 
 class UserDetailAPI(EnvelopeMixin, generics.RetrieveAPIView):
+    permission_classes = [IsAdmin]
     serializer_class = UserSerializer
 
     def get_queryset(self):

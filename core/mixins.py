@@ -4,6 +4,13 @@ from django.contrib import messages
 from django.contrib.auth.mixins import AccessMixin, LoginRequiredMixin
 from django.shortcuts import redirect
 
+# Shared with core.permissions so the web and API agree on who gets in.
+ADMIN_ROLES = ("admin",)
+MANAGER_ROLES = ("admin", "manager")
+INVENTORY_EDITOR_ROLES = ("admin", "manager", "inventory")
+# Everyone who works leads, chats and bookings — i.e. not the inventory role.
+SALES_ROLES = ("admin", "manager", "employee")
+
 
 class PageMixin(LoginRequiredMixin):
     """Supplies the heading/subtitle every dashboard template renders."""
@@ -46,12 +53,18 @@ class RoleRequiredMixin(AccessMixin):
 
 
 class ManagerRequiredMixin(PageMixin, RoleRequiredMixin):
-    allowed_roles = ("admin", "manager")
+    allowed_roles = MANAGER_ROLES
 
 
 class AdminRequiredMixin(PageMixin, RoleRequiredMixin):
-    allowed_roles = ("admin",)
+    allowed_roles = ADMIN_ROLES
 
 
 class InventoryEditorMixin(PageMixin, RoleRequiredMixin):
-    allowed_roles = ("admin", "manager", "inventory")
+    allowed_roles = INVENTORY_EDITOR_ROLES
+
+
+class SalesRequiredMixin(PageMixin, RoleRequiredMixin):
+    """CRM, conversations and bookings: everyone except the inventory role."""
+
+    allowed_roles = SALES_ROLES

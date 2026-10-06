@@ -2,6 +2,7 @@ from django.urls import path
 from rest_framework import generics
 
 from core.api import EnvelopeMixin
+from core.permissions import IsManager
 
 from . import selectors
 from .serializers import WebsiteSerializer
@@ -10,6 +11,7 @@ app_name = "api_websites"
 
 
 class WebsiteListAPI(EnvelopeMixin, generics.ListAPIView):
+    permission_classes = [IsManager]
     serializer_class = WebsiteSerializer
 
     def get_queryset(self):
@@ -20,6 +22,7 @@ class WebsiteListAPI(EnvelopeMixin, generics.ListAPIView):
 
 
 class WebsiteDetailAPI(EnvelopeMixin, generics.RetrieveAPIView):
+    permission_classes = [IsManager]
     serializer_class = WebsiteSerializer
 
     def get_queryset(self):

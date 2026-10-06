@@ -35,6 +35,24 @@ class SuccessResponse(Response):
         super().__init__(payload, status=status_code, **kwargs)
 
 
+class ErrorResponse(Response):
+    """Hand-written error reply in the same envelope as `exception_handler`.
+
+    `message` is kept at the top level because the chat widget shows it.
+    """
+
+    def __init__(self, message, status_code=status.HTTP_400_BAD_REQUEST, detail=None, **kwargs):
+        payload = {
+            "success": False,
+            "message": message,
+            "error": {
+                "status_code": status_code,
+                "detail": message if detail is None else detail,
+            },
+        }
+        super().__init__(payload, status=status_code, **kwargs)
+
+
 class EnvelopePagination(PageNumberPagination):
     """Page-number pagination that keeps the `success`/`data` envelope shape."""
 

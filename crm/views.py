@@ -4,16 +4,10 @@ from django.urls import reverse, reverse_lazy
 from django.views import View
 from django.views.generic import CreateView, DetailView, TemplateView, UpdateView
 
-from core.mixins import PageMixin
+from bookings.selectors import visible_bookings
+from conversations.selectors import visible_conversations
+from core.mixins import SalesRequiredMixin
 from core.selectors import paginate
-
-
-def _safe_next(request, fallback="crm:follow_ups"):
-    """Only follow a `next` value that points back inside this site."""
-    target = request.POST.get("next", "")
-    if target.startswith("/") and not target.startswith("//"):
-        return target
-    return fallback
 
 from . import selectors, services
 from .forms import (
@@ -26,10 +20,25 @@ from .forms import (
     LeadNoteForm,
     LeadStatusForm,
 )
-from .models import Customer, FollowUpTask, Lead
+from .models import Customer, Lead
 
 
-class CustomerListView(PageMixin, TemplateView):
+def _lead_redirect(request, pk):
+    """Back to the lead, unless the user just handed it to someone else."""
+    if selectors.visible_leads(request.user).filter(pk=pk).exists():
+        return reverse("crm:lead_detail", args=[pk])
+    return reverse("crm:leads")
+
+
+def _safe_next(request, fallback="crm:follow_ups"):
+    """Only follow a `next` value that points back inside this site."""
+    target = request.POST.get("next", "")
+    if target.startswith("/") and not target.startswith("//"):
+        return target
+    return fallback
+
+
+class CustomerListView(SalesRequiredMixin, TemplateView):
     template_name = "crm/customers.html"
     page_title = "Customer Profiles"
     page_subtitle = "Central customer records shared by chat, CRM and bookings."
@@ -41,7 +50,9 @@ class CustomerListView(PageMixin, TemplateView):
         form.is_valid()
         data = form.cleaned_data if form.is_bound and form.is_valid() else {}
         queryset = selectors.list_customers(
-            q=data.get("q", "") or "", city=data.get("city", "") or ""
+            q=data.get("q", "") or "",
+            city=data.get("city", "") or "",
+            user=self.request.user,
         )
         ctx["filter_form"] = form
         ctx["page_obj"] = paginate(queryset, self.request.GET.get("page"))
@@ -49,7 +60,7 @@ class CustomerListView(PageMixin, TemplateView):
         return ctx
 
 
-class CustomerCreateView(PageMixin, CreateView):
+class CustomerCreateView(SalesRequiredMixin, CreateView):
     model = Customer
     form_class = CustomerForm
     template_name = "crm/customer_form.html"
@@ -66,7 +77,7 @@ class CustomerCreateView(PageMixin, CreateView):
         return response
 
 
-class CustomerUpdateView(PageMixin, UpdateView):
+class CustomerUpdateView(SalesRequiredMixin, UpdateView):
     model = Customer
     form_class = CustomerForm
     template_name = "crm/customer_form.html"
@@ -75,20 +86,20 @@ class CustomerUpdateView(PageMixin, UpdateView):
     active_nav = "crm"
 
     def get_queryset(self):
-        return Customer.objects.filter(is_deleted=False)
+        return selectors.visible_customers(self.request.user)
 
     def get_success_url(self):
         return reverse("crm:customer_detail", args=[self.object.pk])
 
 
-class CustomerDetailView(PageMixin, DetailView):
+class CustomerDetailView(SalesRequiredMixin, DetailView):
     model = Customer
     template_name = "crm/customer_detail.html"
     context_object_name = "customer"
     active_nav = "crm"
 
     def get_queryset(self):
-        return Customer.objects.filter(is_deleted=False)
+        return selectors.visible_customers(self.request.user)
 
     def get_page_title(self):
         return self.object.full_name
@@ -98,13 +109,16 @@ class CustomerDetailView(PageMixin, DetailView):
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
-        ctx["leads"] = self.object.leads.filter(is_deleted=False).select_related("website")
-        ctx["bookings"] = self.object.bookings.all()[:20]
-        ctx["conversations"] = self.object.conversations.all()[:20]
+        user = self.request.user
+        ctx["leads"] = selectors.visible_leads(user).filter(customer=self.object).select_related(
+            "website"
+        )
+        ctx["bookings"] = visible_bookings(user).filter(customer=self.object)[:20]
+        ctx["conversations"] = visible_conversations(user).filter(customer=self.object)[:20]
         return ctx
 
 
-class LeadListView(PageMixin, TemplateView):
+class LeadListView(SalesRequiredMixin, TemplateView):
     template_name = "crm/leads.html"
     page_title = "Leads"
     page_subtitle = "Filter by source, destination, status, date and assignee."
@@ -132,7 +146,7 @@ class LeadListView(PageMixin, TemplateView):
         return ctx
 
 
-class LeadPipelineView(PageMixin, TemplateView):
+class LeadPipelineView(SalesRequiredMixin, TemplateView):
     template_name = "crm/pipeline.html"
     page_title = "Lead Pipeline"
     page_subtitle = "New → Qualified → Interested → Payment Pending → Converted / Follow-up / Lost."
@@ -144,7 +158,7 @@ class LeadPipelineView(PageMixin, TemplateView):
         return ctx
 
 
-class LeadCreateView(PageMixin, CreateView):
+class LeadCreateView(SalesRequiredMixin, CreateView):
     model = Lead
     form_class = LeadForm
     template_name = "crm/lead_form.html"
@@ -170,7 +184,7 @@ class LeadCreateView(PageMixin, CreateView):
         return reverse("crm:lead_detail", args=[self.object.pk])
 
 
-class LeadUpdateView(PageMixin, UpdateView):
+class LeadUpdateView(SalesRequiredMixin, UpdateView):
     model = Lead
     form_class = LeadForm
     template_name = "crm/lead_form.html"
@@ -179,7 +193,7 @@ class LeadUpdateView(PageMixin, UpdateView):
     active_nav = "crm"
 
     def get_queryset(self):
-        return Lead.objects.filter(is_deleted=False)
+        return selectors.visible_leads(self.request.user)
 
     def form_valid(self, form):
         lead = form.save(commit=False)
@@ -191,20 +205,17 @@ class LeadUpdateView(PageMixin, UpdateView):
         )
         self.object = lead
         messages.success(self.request, "Lead updated.")
-        return redirect(self.get_success_url())
-
-    def get_success_url(self):
-        return reverse("crm:lead_detail", args=[self.object.pk])
+        return redirect(_lead_redirect(self.request, lead.pk))
 
 
-class LeadDetailView(PageMixin, DetailView):
+class LeadDetailView(SalesRequiredMixin, DetailView):
     model = Lead
     template_name = "crm/lead_detail.html"
     context_object_name = "lead"
     active_nav = "crm"
 
     def get_queryset(self):
-        return Lead.objects.filter(is_deleted=False).select_related(
+        return selectors.visible_leads(self.request.user).select_related(
             "customer", "website", "assigned_to", "assigned_team"
         )
 
@@ -220,8 +231,8 @@ class LeadDetailView(PageMixin, DetailView):
         ctx["notes"] = lead.notes.select_related("author")
         ctx["activities"] = lead.activities.select_related("actor")[:50]
         ctx["follow_ups"] = lead.follow_ups.select_related("assigned_to")
-        ctx["bookings"] = lead.bookings.all()
-        ctx["conversations"] = lead.conversations.all()
+        ctx["bookings"] = visible_bookings(self.request.user).filter(lead=lead)
+        ctx["conversations"] = visible_conversations(self.request.user).filter(lead=lead)
         ctx["note_form"] = LeadNoteForm()
         ctx["status_form"] = LeadStatusForm(initial={"status": lead.status})
         ctx["assign_form"] = LeadAssignForm(
@@ -233,9 +244,9 @@ class LeadDetailView(PageMixin, DetailView):
         return ctx
 
 
-class LeadStatusUpdateView(PageMixin, View):
+class LeadStatusUpdateView(SalesRequiredMixin, View):
     def post(self, request, pk):
-        lead = get_object_or_404(Lead, pk=pk, is_deleted=False)
+        lead = get_object_or_404(selectors.visible_leads(request.user), pk=pk)
         form = LeadStatusForm(request.POST)
         if form.is_valid():
             services.change_status(
@@ -251,9 +262,9 @@ class LeadStatusUpdateView(PageMixin, View):
         return redirect("crm:lead_detail", pk=pk)
 
 
-class LeadAssignView(PageMixin, View):
+class LeadAssignView(SalesRequiredMixin, View):
     def post(self, request, pk):
-        lead = get_object_or_404(Lead, pk=pk, is_deleted=False)
+        lead = get_object_or_404(selectors.visible_leads(request.user), pk=pk)
         form = LeadAssignForm(request.POST)
         if form.is_valid():
             services.assign_lead(
@@ -266,12 +277,12 @@ class LeadAssignView(PageMixin, View):
             messages.success(request, "Assignment updated.")
         else:
             messages.error(request, "Could not update the assignment.")
-        return redirect("crm:lead_detail", pk=pk)
+        return redirect(_lead_redirect(request, pk))
 
 
-class LeadNoteCreateView(PageMixin, View):
+class LeadNoteCreateView(SalesRequiredMixin, View):
     def post(self, request, pk):
-        lead = get_object_or_404(Lead, pk=pk, is_deleted=False)
+        lead = get_object_or_404(selectors.visible_leads(request.user), pk=pk)
         form = LeadNoteForm(request.POST)
         if form.is_valid():
             services.add_note(
@@ -286,7 +297,7 @@ class LeadNoteCreateView(PageMixin, View):
         return redirect("crm:lead_detail", pk=pk)
 
 
-class FollowUpListView(PageMixin, TemplateView):
+class FollowUpListView(SalesRequiredMixin, TemplateView):
     template_name = "crm/follow_ups.html"
     page_title = "Follow-up Tasks"
     page_subtitle = "Overdue, due today and upcoming reminders."
@@ -303,10 +314,14 @@ class FollowUpListView(PageMixin, TemplateView):
         return ctx
 
 
-class FollowUpCreateView(PageMixin, View):
+class FollowUpCreateView(SalesRequiredMixin, View):
     def post(self, request):
         form = FollowUpTaskForm(request.POST)
-        if form.is_valid():
+        if form.is_valid() and not selectors.visible_leads(request.user).filter(
+            pk=form.cleaned_data["lead"].pk
+        ).exists():
+            messages.error(request, "Choose one of your leads.")
+        elif form.is_valid():
             services.create_follow_up(
                 task=form.save(commit=False), actor=request.user, request=request
             )
@@ -316,9 +331,9 @@ class FollowUpCreateView(PageMixin, View):
         return redirect(_safe_next(request))
 
 
-class FollowUpCompleteView(PageMixin, View):
+class FollowUpCompleteView(SalesRequiredMixin, View):
     def post(self, request, pk):
-        task = get_object_or_404(FollowUpTask, pk=pk)
+        task = get_object_or_404(selectors.visible_follow_ups(request.user), pk=pk)
         services.complete_follow_up(task=task, actor=request.user, request=request)
         messages.success(request, "Follow-up marked complete.")
         return redirect(_safe_next(request))

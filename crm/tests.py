@@ -1,7 +1,9 @@
-from datetime import timedelta
+from datetime import datetime, timedelta
 from decimal import Decimal
+from unittest import mock
+from zoneinfo import ZoneInfo
 
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
@@ -138,7 +140,11 @@ class PipelineTests(LeadFixture):
 class FollowUpTests(LeadFixture):
     def test_buckets_split_overdue_today_and_upcoming(self):
         lead = self.make_lead()
-        now = timezone.now()
+        # Pinned to local midday so "now + 1 minute" never crosses midnight.
+        now = timezone.localtime().replace(hour=12, minute=0, second=0, microsecond=0)
+        patcher = mock.patch("django.utils.timezone.now", return_value=now)
+        patcher.start()
+        self.addCleanup(patcher.stop)
         for offset in (-1, 0, 5):
             services.create_follow_up(
                 task=FollowUpTask(
@@ -237,3 +243,179 @@ class CRMViewTests(LeadFixture):
             {"next": "https://evil.example/steal"},
         )
         self.assertRedirects(response, reverse("crm:follow_ups"))
+
+
+class LeadAccessTests(LeadFixture):
+    """Employees only reach leads assigned to them or unassigned; others are a 404."""
+
+    def setUp(self):
+        super().setUp()
+        self.theirs = self.make_lead(title="Other's lead", assigned_to=self.other)
+        self.mine = self.make_lead(title="My lead", assigned_to=self.agent)
+        self.open_lead = self.make_lead(title="Unassigned lead")
+        self.client.force_login(self.agent)
+
+    def test_every_lead_page_and_action_404s_on_another_employees_lead(self):
+        pk = self.theirs.pk
+        self.assertEqual(self.client.get(reverse("crm:lead_detail", args=[pk])).status_code, 404)
+        self.assertEqual(self.client.get(reverse("crm:lead_edit", args=[pk])).status_code, 404)
+        for name, data in (
+            ("crm:lead_status", {"status": LeadStatus.LOST}),
+            ("crm:lead_assign", {"assigned_to": self.agent.pk}),
+            ("crm:lead_note", {"body": "hi", "is_internal": "on"}),
+        ):
+            response = self.client.post(reverse(name, args=[pk]), data)
+            self.assertEqual(response.status_code, 404, name)
+        self.theirs.refresh_from_db()
+        self.assertEqual(self.theirs.assigned_to, self.other)
+        self.assertNotEqual(self.theirs.status, LeadStatus.LOST)
+
+    def test_own_and_unassigned_leads_open(self):
+        for lead in (self.mine, self.open_lead):
+            response = self.client.get(reverse("crm:lead_detail", args=[lead.pk]))
+            self.assertEqual(response.status_code, 200)
+
+    def test_managers_open_everything(self):
+        self.client.force_login(self.manager)
+        response = self.client.get(reverse("crm:lead_detail", args=[self.theirs.pk]))
+        self.assertEqual(response.status_code, 200)
+
+    def test_handing_a_lead_away_redirects_to_the_list(self):
+        response = self.client.post(
+            reverse("crm:lead_assign", args=[self.mine.pk]), {"assigned_to": self.other.pk}
+        )
+        self.assertRedirects(response, reverse("crm:leads"))
+
+    def test_the_lead_detail_api_is_scoped(self):
+        response = self.client.get(reverse("api_crm:lead_detail", args=[self.theirs.pk]))
+        self.assertEqual(response.status_code, 404)
+        self.assertFalse(response.json()["success"])
+
+    def test_the_inventory_role_cannot_reach_crm(self):
+        stock = User.objects.create_user("stock", password="pw", role="inventory")
+        self.client.force_login(stock)
+        self.assertRedirects(self.client.get(reverse("crm:leads")), reverse("dashboard:overview"))
+        self.assertEqual(self.client.get(reverse("api_crm:leads")).status_code, 403)
+
+
+class CustomerAccessTests(LeadFixture):
+    def test_a_customer_only_known_through_another_employees_lead_is_hidden(self):
+        self.make_lead(assigned_to=self.other)
+        self.client.force_login(self.agent)
+        for name in ("crm:customer_detail", "crm:customer_edit"):
+            response = self.client.get(reverse(name, args=[self.customer.pk]))
+            self.assertEqual(response.status_code, 404, name)
+        response = self.client.get(reverse("api_crm:customer_detail", args=[self.customer.pk]))
+        self.assertEqual(response.status_code, 404)
+        self.assertNotContains(self.client.get(reverse("crm:customers")), "ana@x.com")
+
+    def test_a_customer_with_a_visible_lead_or_no_history_is_shown(self):
+        self.make_lead(assigned_to=self.agent)
+        fresh = Customer.objects.create(first_name="New", email="new@x.com")
+        self.client.force_login(self.agent)
+        for customer in (self.customer, fresh):
+            response = self.client.get(reverse("crm:customer_detail", args=[customer.pk]))
+            self.assertEqual(response.status_code, 200)
+
+
+class FollowUpAccessTests(LeadFixture):
+    def make_task(self, lead, assigned_to, **kwargs):
+        return services.create_follow_up(
+            task=FollowUpTask(
+                lead=lead,
+                assigned_to=assigned_to,
+                title=kwargs.pop("title", "Call"),
+                due_at=kwargs.pop("due_at", timezone.now() + timedelta(days=2)),
+                **kwargs,
+            ),
+            actor=self.manager,
+        )
+
+    def test_an_employee_cannot_complete_another_employees_follow_up(self):
+        task = self.make_task(self.make_lead(assigned_to=self.other), self.other)
+        self.client.force_login(self.agent)
+        response = self.client.post(reverse("crm:follow_up_complete", args=[task.pk]))
+        self.assertEqual(response.status_code, 404)
+        task.refresh_from_db()
+        self.assertFalse(task.is_completed)
+
+    def test_a_task_assigned_to_me_on_someone_elses_lead_is_mine(self):
+        task = self.make_task(self.make_lead(assigned_to=self.other), self.agent)
+        self.client.force_login(self.agent)
+        self.client.post(reverse("crm:follow_up_complete", args=[task.pk]))
+        task.refresh_from_db()
+        self.assertTrue(task.is_completed)
+
+    def test_the_follow_up_api_without_a_bucket_is_scoped(self):
+        self.make_task(self.make_lead(assigned_to=self.other), self.other, title="Theirs")
+        self.make_task(self.make_lead(assigned_to=self.agent), self.agent, title="Mine")
+        self.client.force_login(self.agent)
+        body = self.client.get(reverse("api_crm:follow_ups")).json()
+        self.assertEqual([row["title"] for row in body["data"]["results"]], ["Mine"])
+
+    def test_the_completed_bucket_respects_the_user(self):
+        theirs = self.make_task(self.make_lead(assigned_to=self.other), self.other)
+        mine = self.make_task(self.make_lead(assigned_to=self.agent), self.agent)
+        for task in (theirs, mine):
+            services.complete_follow_up(task=task, actor=self.manager)
+        completed = follow_up_buckets(user=self.agent, include_completed=True)["completed"]
+        self.assertEqual([task.pk for task in completed], [mine.pk])
+
+    def test_scheduling_on_another_employees_lead_is_refused(self):
+        self.client.force_login(self.agent)
+        for title, owner in (("Sneaky", self.other), ("Allowed", self.agent)):
+            self.client.post(
+                reverse("crm:follow_up_create"),
+                {
+                    "lead": self.make_lead(assigned_to=owner).pk,
+                    "assigned_to": self.agent.pk,
+                    "title": title,
+                    "due_at": "2030-01-01T10:00",
+                },
+            )
+        self.assertFalse(FollowUpTask.objects.filter(title="Sneaky").exists())
+        self.assertTrue(FollowUpTask.objects.filter(title="Allowed").exists())
+
+    @override_settings(TIME_ZONE="Asia/Kolkata")
+    def test_today_means_the_local_calendar_day(self):
+        ist = ZoneInfo("Asia/Kolkata")
+        # 01:30 IST on the 11th is still the 10th in UTC.
+        now = datetime(2026, 1, 11, 1, 30, tzinfo=ist)
+        task = self.make_task(
+            self.make_lead(), self.agent, due_at=datetime(2026, 1, 11, 10, 0, tzinfo=ist)
+        )
+        with mock.patch("django.utils.timezone.now", return_value=now):
+            buckets = follow_up_buckets(user=self.manager)
+            self.assertEqual(list(buckets["today"]), [task])
+            self.assertEqual(buckets["upcoming"].count(), 0)
+
+
+class LeadAPIFilterTests(LeadFixture):
+    def setUp(self):
+        super().setUp()
+        self.other_site = Website.objects.create(
+            name="Other", domain="other.com", source_identifier="other"
+        )
+        self.a = self.make_lead(title="Alpha", assigned_to=self.agent)
+        self.b = self.make_lead(title="Beta", website=self.other_site)
+        Lead.objects.filter(pk=self.b.pk).update(
+            created_at=timezone.now() - timedelta(days=40)
+        )
+        self.client.force_login(self.manager)
+
+    def titles(self, **params):
+        body = self.client.get(reverse("api_crm:leads"), params).json()
+        return sorted(row["title"] for row in body["data"]["results"])
+
+    def test_filters_by_assignee_website_and_created_range(self):
+        self.assertEqual(self.titles(assigned_to=self.agent.pk), ["Alpha"])
+        self.assertEqual(self.titles(website=self.other_site.pk), ["Beta"])
+        recent = (timezone.localdate() - timedelta(days=7)).isoformat()
+        self.assertEqual(self.titles(created_from=recent), ["Alpha"])
+        self.assertEqual(self.titles(created_to=recent), ["Beta"])
+
+    def test_a_bad_filter_value_is_a_400_envelope(self):
+        response = self.client.get(reverse("api_crm:leads"), {"created_from": "not-a-date"})
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(response.json()["success"])
+

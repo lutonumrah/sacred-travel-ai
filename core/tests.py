@@ -51,3 +51,86 @@ class PaginateTests(TestCase):
         User.objects.create_user("a", password="x")
         page = paginate(User.objects.all(), 99)
         self.assertEqual(page.number, 1)
+
+
+class PermissionTests(TestCase):
+    def _request(self, user):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(user=user)
+
+    def test_role_permissions_mirror_the_mixins(self):
+        from core.permissions import IsAdmin, IsInventoryEditor, IsManager, IsSalesTeam
+
+        users = {
+            role: User.objects.create_user(role, password="x", role=role)
+            for role in ("admin", "manager", "employee", "inventory")
+        }
+        expected = {
+            IsAdmin: {"admin"},
+            IsManager: {"admin", "manager"},
+            IsInventoryEditor: {"admin", "manager", "inventory"},
+            IsSalesTeam: {"admin", "manager", "employee"},
+        }
+        for permission, allowed in expected.items():
+            for role, user in users.items():
+                self.assertEqual(
+                    permission().has_permission(self._request(user), None),
+                    role in allowed,
+                    f"{permission.__name__} / {role}",
+                )
+
+    def test_superusers_always_pass(self):
+        from core.permissions import IsAdmin
+
+        root = User.objects.create_superuser("root", password="x", role="inventory")
+        self.assertTrue(IsAdmin().has_permission(self._request(root), None))
+
+
+class ErrorResponseTests(TestCase):
+    def test_matches_the_exception_handler_envelope(self):
+        from core.api import ErrorResponse
+
+        response = ErrorResponse("Nope.", status_code=404)
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(
+            response.data,
+            {"success": False, "message": "Nope.", "error": {"status_code": 404, "detail": "Nope."}},
+        )
+
+
+class SettingsGuardTests(TestCase):
+    def _load_settings(self, env):
+        import importlib.util
+        import os
+        from pathlib import Path
+        from unittest import mock
+
+        path = Path(__file__).resolve().parent.parent / "config" / "settings.py"
+        spec = importlib.util.spec_from_file_location("settings_probe", path)
+        module = importlib.util.module_from_spec(spec)
+        clean = {k: v for k, v in os.environ.items() if k not in ("SECRET_KEY", "DEBUG")}
+        clean.update(env)
+        # Keep a developer's .env out of the probe.
+        with mock.patch.dict(os.environ, clean, clear=True), mock.patch(
+            "dotenv.load_dotenv", return_value=False
+        ):
+            spec.loader.exec_module(module)
+        return module
+
+    def test_debug_defaults_to_off_and_then_needs_a_secret_key(self):
+        from django.core.exceptions import ImproperlyConfigured
+
+        with self.assertRaises(ImproperlyConfigured):
+            self._load_settings({})
+
+    def test_debug_mode_falls_back_to_a_dev_key(self):
+        module = self._load_settings({"DEBUG": "True"})
+        self.assertTrue(module.DEBUG)
+        self.assertTrue(module.SECRET_KEY)
+
+    def test_an_explicit_key_is_used(self):
+        module = self._load_settings({"SECRET_KEY": "k" * 50})
+        self.assertFalse(module.DEBUG)
+        self.assertEqual(module.SECRET_KEY, "k" * 50)
+

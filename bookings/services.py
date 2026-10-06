@@ -8,11 +8,11 @@ from django.db import transaction
 from django.urls import reverse
 from django.utils import timezone
 
-from core.notifications import notify, notify_managers
+from core.notifications import notify, notify_many, notify_managers
 from core.services import log_audit
 
 from . import payments
-from .models import Booking, BookingStatus, Payment, PaymentStatus
+from .models import Booking, BookingStatus, Payment, PaymentStatus, WebhookEvent
 
 logger = logging.getLogger(__name__)
 
@@ -119,6 +119,123 @@ def create_payment_order(*, booking, actor=None, request=None):
     return payment
 
 
+# Payments that already hold the customer's money; never settle or fail these again.
+SETTLED_PAYMENT_STATUSES = (PaymentStatus.SUCCESS, PaymentStatus.REFUNDED)
+OPEN_PAYMENT_STATUSES = (PaymentStatus.CREATED, PaymentStatus.PENDING)
+
+
+def _booking_link(booking):
+    return reverse("bookings:detail", args=[booking.pk])
+
+
+def _notify_booking_people(*, booking, title, body="", actor=None):
+    """Managers, whoever raised the booking and the lead owner — minus the actor."""
+    from django.contrib.auth import get_user_model
+
+    people = {
+        user.pk: user
+        for user in get_user_model().objects.filter(
+            is_active=True, is_active_employee=True, role__in=["admin", "manager"]
+        )
+    }
+    for user in (booking.created_by, booking.lead.assigned_to if booking.lead_id else None):
+        if user is not None:
+            people[user.pk] = user
+    if actor is not None and getattr(actor, "is_authenticated", False):
+        people.pop(actor.pk, None)
+    notify_many(
+        recipients=list(people.values()),
+        notification_type="payment",
+        title=title,
+        body=body,
+        link=_booking_link(booking),
+        metadata={"booking_id": booking.pk},
+    )
+
+
+def _amount_matches(payment, entity):
+    """Gateway amount (paise) and currency equal what this payment asked for."""
+    amount = entity.get("amount")
+    currency = (entity.get("currency") or "").upper()
+    try:
+        amount = int(amount)
+    except (TypeError, ValueError):
+        return False
+    return amount == payments.to_paise(payment.amount) and currency == payment.currency.upper()
+
+
+def _flag_amount_mismatch(*, payment, entity, source, actor=None, request=None):
+    booking = payment.booking
+    details = {
+        "order_id": payment.razorpay_order_id,
+        "payment_id": entity.get("id", ""),
+        "expected_paise": payments.to_paise(payment.amount),
+        "expected_currency": payment.currency,
+        "received_paise": entity.get("amount"),
+        "received_currency": entity.get("currency"),
+        "source": source,
+    }
+    logger.error("Razorpay amount mismatch on %s: %s", booking.booking_number, details)
+    log_audit(
+        actor=actor,
+        action="payment.amount_mismatch",
+        entity=booking,
+        metadata=details,
+        request=request,
+    )
+    notify_managers(
+        notification_type="payment",
+        title=f"Payment amount mismatch on {booking.booking_number}",
+        body=(
+            f"Expected {payment.currency} {payment.amount}, Razorpay reported "
+            f"{entity.get('currency')} {entity.get('amount')} (paise). Booking not confirmed."
+        ),
+        link=_booking_link(booking),
+        metadata={"booking_id": booking.pk},
+    )
+
+
+@transaction.atomic
+def _settle_payment(*, payment, payment_id, signature="", actor=None, request=None):
+    """Record captured money and confirm the booking if it is still open."""
+    payment.razorpay_payment_id = payment_id or payment.razorpay_payment_id
+    if signature:
+        payment.razorpay_signature = signature
+    payment.status = PaymentStatus.SUCCESS
+    payment.paid_at = timezone.now()
+    payment.save(
+        update_fields=[
+            "razorpay_payment_id",
+            "razorpay_signature",
+            "status",
+            "paid_at",
+            "updated_at",
+        ]
+    )
+    booking = payment.booking
+    if booking.status in (BookingStatus.CANCELLED, BookingStatus.REFUNDED):
+        # The customer paid an order we had already closed: someone must refund it.
+        log_audit(
+            actor=actor,
+            action="payment.after_cancel",
+            entity=booking,
+            metadata={"order_id": payment.razorpay_order_id, "payment_id": payment_id},
+            request=request,
+        )
+        notify_managers(
+            notification_type="payment",
+            title=f"Payment received for {booking.get_status_display().lower()} booking "
+            f"{booking.booking_number}",
+            body=f"{payment.currency} {payment.amount} — refund it in Razorpay.",
+            link=_booking_link(booking),
+            metadata={"booking_id": booking.pk},
+        )
+        return payment
+    if booking.status != BookingStatus.CONFIRMED:
+        mark_booking_paid(booking=booking, actor=actor, request=request)
+    return payment
+
+
 @transaction.atomic
 def verify_payment(*, order_id, payment_id, signature, actor=None, request=None):
     """Verify a checkout callback and settle the booking.
@@ -131,16 +248,15 @@ def verify_payment(*, order_id, payment_id, signature, actor=None, request=None)
     if payment is None:
         return None, "No payment matches that order."
 
-    if payment.status == PaymentStatus.SUCCESS:
+    if payment.status in SETTLED_PAYMENT_STATUSES:
         # Razorpay retries callbacks; settling twice must be a no-op.
         return payment, None
 
     if not payments.verify_payment_signature(
         order_id=order_id, payment_id=payment_id, signature=signature
     ):
-        payment.status = PaymentStatus.FAILED
-        payment.failure_reason = "Signature verification failed"
-        payment.save(update_fields=["status", "failure_reason", "updated_at"])
+        # Leave the payment untouched: anyone can post garbage here, and failing
+        # the order would block the customer's genuine payment.
         log_audit(
             actor=actor,
             action="payment.verify_failed",
@@ -150,20 +266,34 @@ def verify_payment(*, order_id, payment_id, signature, actor=None, request=None)
         )
         return payment, "Signature verification failed."
 
-    payment.razorpay_payment_id = payment_id
-    payment.razorpay_signature = signature
-    payment.status = PaymentStatus.SUCCESS
-    payment.paid_at = timezone.now()
-    payment.save(
-        update_fields=[
-            "razorpay_payment_id",
-            "razorpay_signature",
-            "status",
-            "paid_at",
-            "updated_at",
-        ]
+    try:
+        gateway = payments.fetch_payment(payment_id)
+    except Exception:
+        logger.exception("Could not fetch Razorpay payment %s.", payment_id)
+        return payment, (
+            "Could not confirm the payment with Razorpay yet. "
+            "It will update automatically once Razorpay notifies us."
+        )
+    if gateway is not None:
+        if gateway.get("order_id") != order_id or not _amount_matches(payment, gateway):
+            _flag_amount_mismatch(
+                payment=payment,
+                entity={"id": payment_id, **gateway},
+                source="checkout",
+                actor=actor,
+                request=request,
+            )
+            return payment, (
+                "The paid amount does not match this booking. A manager has been notified."
+            )
+        if gateway.get("status") != "captured":
+            return payment, (
+                "The payment is not captured yet. It will update once Razorpay confirms it."
+            )
+
+    _settle_payment(
+        payment=payment, payment_id=payment_id, signature=signature, actor=actor, request=request
     )
-    mark_booking_paid(booking=payment.booking, actor=actor, request=request)
     return payment, None
 
 
@@ -184,7 +314,7 @@ def mark_booking_paid(*, booking, actor=None, request=None):
     )
     _advance_lead(booking, status=LeadStatus.CONVERTED, actor=actor, request=request)
 
-    link = reverse("bookings:detail", args=[booking.pk])
+    link = _booking_link(booking)
     if booking.created_by:
         notify(
             recipient=booking.created_by,
@@ -207,12 +337,25 @@ def mark_booking_paid(*, booking, actor=None, request=None):
 
 @transaction.atomic
 def mark_payment_failed(*, payment, reason="", actor=None, request=None):
+    booking = payment.booking
+    if payment.status not in OPEN_PAYMENT_STATUSES:
+        # Razorpay allows retries on one order, so a failed attempt can arrive after
+        # the successful one (or after we closed the order). Nothing to downgrade.
+        log_audit(
+            actor=actor,
+            action="payment.failed_ignored",
+            entity=booking,
+            metadata={"reason": reason, "payment_status": payment.status},
+            request=request,
+        )
+        return payment
+
     payment.status = PaymentStatus.FAILED
     payment.failure_reason = reason[:255]
     payment.save(update_fields=["status", "failure_reason", "updated_at"])
-    booking = payment.booking
-    booking.status = BookingStatus.FAILED
-    booking.save(update_fields=["status", "updated_at"])
+    if booking.status == BookingStatus.PENDING:
+        booking.status = BookingStatus.FAILED
+        booking.save(update_fields=["status", "updated_at"])
     log_audit(
         actor=actor,
         action="payment.failed",
@@ -224,42 +367,171 @@ def mark_payment_failed(*, payment, reason="", actor=None, request=None):
         notification_type="payment",
         title=f"Payment failed for {booking.booking_number}",
         body=reason,
-        link=reverse("bookings:detail", args=[booking.pk]),
+        link=_booking_link(booking),
         metadata={"booking_id": booking.pk},
     )
     return payment
 
 
+def _lead_has_other_bookings(booking, statuses):
+    return (
+        Booking.objects.filter(lead_id=booking.lead_id, status__in=statuses)
+        .exclude(pk=booking.pk)
+        .exists()
+    )
+
+
 @transaction.atomic
 def cancel_booking(*, booking, actor=None, request=None, reason=""):
+    from crm import services as crm_services
+    from crm.models import LeadStatus
+
+    if booking.status == BookingStatus.CANCELLED:
+        return booking
     booking.status = BookingStatus.CANCELLED
     booking.cancelled_at = timezone.now()
     booking.save(update_fields=["status", "cancelled_at", "updated_at"])
+
+    # Close open orders so a late checkout can't confirm a cancelled booking.
+    closed = booking.payments.filter(status__in=OPEN_PAYMENT_STATUSES).update(
+        status=PaymentStatus.CANCELLED,
+        failure_reason=f"Booking cancelled{': ' + reason if reason else ''}"[:255],
+        updated_at=timezone.now(),
+    )
     log_audit(
         actor=actor,
         action="booking.cancel",
         entity=booking,
-        metadata={"reason": reason},
+        metadata={"reason": reason, "payments_closed": closed},
         request=request,
+    )
+
+    lead = booking.lead
+    if (
+        lead is not None
+        and lead.status == LeadStatus.PAYMENT_PENDING
+        and not _lead_has_other_bookings(booking, [BookingStatus.PENDING, BookingStatus.DRAFT])
+    ):
+        crm_services.change_status(
+            lead=lead, status=LeadStatus.INTERESTED, actor=actor, request=request
+        )
+
+    body = reason or booking.product_name
+    if booking.payments.filter(status=PaymentStatus.SUCCESS).exists():
+        body += " · A captured payment exists — refund it in Razorpay."
+    _notify_booking_people(
+        booking=booking,
+        title=f"Booking cancelled: {booking.booking_number}",
+        body=body,
+        actor=actor,
     )
     return booking
 
 
+def _is_full_refund(payment, refund, payment_entity):
+    refund_status = payment_entity.get("refund_status")
+    if refund_status:
+        return refund_status == "full"
+    try:
+        return int(refund["amount"]) >= payments.to_paise(payment.amount)
+    except (KeyError, TypeError, ValueError):
+        return True
+
+
+@transaction.atomic
+def record_refund(*, payment, refund=None, payment_entity=None, actor=None, request=None):
+    """Apply a processed Razorpay refund to the payment, booking and lead."""
+    from crm import services as crm_services
+    from crm.models import LeadStatus
+
+    refund = refund or {}
+    booking = payment.booking
+    if not _is_full_refund(payment, refund, payment_entity or {}):
+        log_audit(
+            actor=actor,
+            action="payment.partial_refund",
+            entity=booking,
+            metadata={"refund_id": refund.get("id", ""), "amount_paise": refund.get("amount")},
+            request=request,
+        )
+        notify_managers(
+            notification_type="payment",
+            title=f"Partial refund on {booking.booking_number}",
+            body=f"{payment.currency} {int(refund.get('amount') or 0) / 100:.2f} refunded.",
+            link=_booking_link(booking),
+            metadata={"booking_id": booking.pk},
+        )
+        return "partial refund recorded"
+
+    if payment.status == PaymentStatus.REFUNDED:
+        return "refund recorded"
+    payment.status = PaymentStatus.REFUNDED
+    payment.save(update_fields=["status", "updated_at"])
+
+    # Another settled payment on the same booking still pays for it.
+    if booking.payments.filter(status=PaymentStatus.SUCCESS).exists():
+        return "refund recorded"
+
+    booking.status = BookingStatus.REFUNDED
+    booking.cancelled_at = booking.cancelled_at or timezone.now()
+    booking.save(update_fields=["status", "cancelled_at", "updated_at"])
+    log_audit(
+        actor=actor,
+        action="booking.refunded",
+        entity=booking,
+        metadata={"refund_id": refund.get("id", ""), "order_id": payment.razorpay_order_id},
+        request=request,
+    )
+
+    lead = booking.lead
+    if (
+        lead is not None
+        and lead.status in (LeadStatus.CONVERTED, LeadStatus.PAYMENT_PENDING)
+        and not _lead_has_other_bookings(booking, [BookingStatus.CONFIRMED, BookingStatus.PAID])
+    ):
+        crm_services.change_status(
+            lead=lead,
+            status=LeadStatus.LOST,
+            lost_reason=f"Booking {booking.booking_number} refunded",
+            actor=actor,
+            request=request,
+        )
+
+    _notify_booking_people(
+        booking=booking,
+        title=f"Booking refunded: {booking.booking_number}",
+        body=f"{payment.currency} {payment.amount} returned to the customer.",
+        actor=actor,
+    )
+    return "refund recorded"
+
+
+def _entity(body, name):
+    entity = (body.get(name) or {}).get("entity") or {}
+    return entity if isinstance(entity, dict) else {}
+
+
 def handle_webhook(*, event, payload, actor=None, request=None):
     """Apply a verified Razorpay webhook event. Returns a short status string."""
-    entity = (
-        payload.get("payload", {}).get("payment", {}).get("entity", {})
-        if isinstance(payload, dict)
-        else {}
-    )
-    order_id = entity.get("order_id", "")
-    payment_id = entity.get("id", "")
-    if not order_id:
+    body = (payload.get("payload") or {}) if isinstance(payload, dict) else {}
+    entity = _entity(body, "payment")
+    order = _entity(body, "order")
+    refund = _entity(body, "refund")
+    order_id = entity.get("order_id") or order.get("id", "")
+    payment_id = entity.get("id") or refund.get("payment_id", "")
+    if not (order_id or payment_id):
         return "ignored: no order id"
 
-    payment = Payment.objects.select_related("booking").filter(
-        razorpay_order_id=order_id
-    ).first()
+    payment = None
+    if order_id:
+        payment = Payment.objects.select_related("booking").filter(
+            razorpay_order_id=order_id
+        ).first()
+    if payment is None and payment_id:
+        # Refund events may only carry the payment id.
+        payment = Payment.objects.select_related("booking").filter(
+            razorpay_payment_id=payment_id
+        ).first()
     if payment is None:
         return "ignored: unknown order"
 
@@ -267,20 +539,18 @@ def handle_webhook(*, event, payload, actor=None, request=None):
     payment.method = entity.get("method", "") or payment.method
     payment.save(update_fields=["raw_response", "method", "updated_at"])
 
-    if event == "payment.captured":
-        if payment.status != PaymentStatus.SUCCESS:
-            payment.razorpay_payment_id = payment_id or payment.razorpay_payment_id
-            payment.status = PaymentStatus.SUCCESS
-            payment.paid_at = timezone.now()
-            payment.save(
-                update_fields=[
-                    "razorpay_payment_id",
-                    "status",
-                    "paid_at",
-                    "updated_at",
-                ]
+    if event in ("payment.captured", "order.paid"):
+        if payment.status in SETTLED_PAYMENT_STATUSES:
+            return "payment captured"
+        if not entity and order:
+            # order.paid without a payment entity: fall back to the order totals.
+            entity = {"amount": order.get("amount_paid"), "currency": order.get("currency")}
+        if not _amount_matches(payment, entity):
+            _flag_amount_mismatch(
+                payment=payment, entity=entity, source=event, actor=actor, request=request
             )
-            mark_booking_paid(booking=payment.booking, actor=actor, request=request)
+            return "ignored: amount mismatch"
+        _settle_payment(payment=payment, payment_id=payment_id, actor=actor, request=request)
         return "payment captured"
 
     if event == "payment.failed":
@@ -293,11 +563,29 @@ def handle_webhook(*, event, payload, actor=None, request=None):
         return "payment failed"
 
     if event == "refund.processed":
-        payment.status = PaymentStatus.REFUNDED
-        payment.save(update_fields=["status", "updated_at"])
-        return "refund recorded"
+        return record_refund(
+            payment=payment, refund=refund, payment_entity=entity, actor=actor, request=request
+        )
 
     return f"ignored: {event}"
+
+
+def process_webhook(*, event_id, event, payload, request=None):
+    """Apply a webhook once per Razorpay event id; repeats are acknowledged and ignored."""
+    with transaction.atomic():
+        record = None
+        if event_id:
+            record, created = WebhookEvent.objects.get_or_create(
+                event_id=event_id[:100], defaults={"event": event[:60]}
+            )
+            if not created:
+                return "ignored: duplicate event"
+        # An exception rolls back the event row too, so Razorpay's retry is processed.
+        result = handle_webhook(event=event, payload=payload, request=request)
+        if record is not None:
+            record.result = result[:120]
+            record.save(update_fields=["result", "updated_at"])
+    return result
 
 
 def booking_from_recommendation(*, recommendation, customer, actor=None, request=None):

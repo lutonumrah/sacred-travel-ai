@@ -14,6 +14,7 @@ class BookingStatus(models.TextChoices):
     CONFIRMED = "confirmed", "Confirmed"
     CANCELLED = "cancelled", "Cancelled"
     FAILED = "failed", "Failed"
+    REFUNDED = "refunded", "Refunded"
 
 
 class PaymentStatus(models.TextChoices):
@@ -22,6 +23,8 @@ class PaymentStatus(models.TextChoices):
     SUCCESS = "success", "Success"
     FAILED = "failed", "Failed"
     REFUNDED = "refunded", "Refunded"
+    # The booking was cancelled before the customer paid this order.
+    CANCELLED = "cancelled", "Cancelled"
 
 
 class Booking(TimeStampedModel):
@@ -116,6 +119,20 @@ class Payment(TimeStampedModel):
 
     def __str__(self):
         return f"Payment {self.razorpay_order_id or self.pk} [{self.status}]"
+
+
+class WebhookEvent(TimeStampedModel):
+    """Razorpay event ids already applied. Razorpay re-delivers on any non-2xx or timeout."""
+
+    event_id = models.CharField(max_length=100, unique=True)
+    event = models.CharField(max_length=60, blank=True)
+    result = models.CharField(max_length=120, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.event} {self.event_id}"
 
 
 class NotificationType(models.TextChoices):
