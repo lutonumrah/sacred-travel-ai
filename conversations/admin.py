@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import Conversation, ConversationHandoff, Message, Recommendation
+from .models import AISettings, Conversation, ConversationHandoff, Message, Recommendation
 
 
 class MessageInline(admin.TabularInline):
@@ -44,3 +44,27 @@ class ConversationHandoffAdmin(admin.ModelAdmin):
 class RecommendationAdmin(admin.ModelAdmin):
     list_display = ("title", "conversation", "inventory_type", "price", "is_selected")
     list_filter = ("inventory_type", "is_selected")
+
+
+@admin.register(AISettings)
+class AISettingsAdmin(admin.ModelAdmin):
+    """Read-only here; keys and models are edited on the dashboard's AI Settings page,
+    which never echoes a saved key back to the browser."""
+
+    list_display = ("__str__", "enabled", "provider", "model", "updated_by", "updated_at")
+    fields = ("enabled", "provider", "model", "anthropic_key_saved", "gemini_key_saved", "updated_by", "updated_at")
+    readonly_fields = fields
+
+    @admin.display(boolean=True, description="Anthropic key saved")
+    def anthropic_key_saved(self, obj):
+        return bool(obj.anthropic_api_key)
+
+    @admin.display(boolean=True, description="Gemini key saved")
+    def gemini_key_saved(self, obj):
+        return bool(obj.gemini_api_key)
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False

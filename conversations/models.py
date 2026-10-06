@@ -142,3 +142,76 @@ class Recommendation(TimeStampedModel):
 
     def __str__(self):
         return self.title
+
+
+class AIProvider(models.TextChoices):
+    ANTHROPIC = "anthropic", "Anthropic (Claude)"
+    GEMINI = "gemini", "Google (Gemini)"
+
+
+# Offered in the settings dropdown. Any other ID can still be typed in by hand.
+CLAUDE_MODELS = [
+    ("claude-opus-5-5", "Claude Opus 5.5 — recommended"),
+    ("claude-sonnet-5-5", "Claude Sonnet 5.5 — faster, half the price"),
+    ("claude-haiku-4-5", "Claude Haiku 4.5 — fastest, cheapest"),
+    ("claude-fable-5-1", "Claude Fable 5.1 — most capable, most expensive"),
+    ("claude-opus-5", "Claude Opus 5"),
+]
+GEMINI_MODELS = [
+    ("gemini-3.8-flash", "Gemini 3.8 Flash — recommended"),
+    ("gemini-3.1-flash-lite", "Gemini 3.1 Flash-Lite — cheapest"),
+    ("gemini-3.7-flash", "Gemini 3.7 Flash"),
+    ("gemini-3.1-pro-preview", "Gemini 3.1 Pro (preview)"),
+]
+MODELS_BY_PROVIDER = {
+    AIProvider.ANTHROPIC: CLAUDE_MODELS,
+    AIProvider.GEMINI: GEMINI_MODELS,
+}
+DEFAULT_MODEL = {
+    AIProvider.ANTHROPIC: "claude-opus-5-5",
+    AIProvider.GEMINI: "gemini-3.8-flash",
+}
+
+
+class AISettings(TimeStampedModel):
+    """Which AI writes the chat replies. A single row, edited by admins.
+
+    Keys saved here take precedence over ANTHROPIC_API_KEY / GEMINI_API_KEY in
+    the environment, which remain the fallback when a field is left blank.
+    """
+
+    enabled = models.BooleanField(default=True)
+    provider = models.CharField(
+        max_length=20, choices=AIProvider.choices, default=AIProvider.ANTHROPIC
+    )
+    model = models.CharField(max_length=100, default=DEFAULT_MODEL[AIProvider.ANTHROPIC])
+    anthropic_api_key = models.CharField(max_length=255, blank=True)
+    gemini_api_key = models.CharField(max_length=255, blank=True)
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+
+    class Meta:
+        verbose_name = "AI settings"
+        verbose_name_plural = "AI settings"
+
+    def __str__(self):
+        return f"AI settings ({self.get_provider_display()} · {self.model})"
+
+    def save(self, *args, **kwargs):
+        self.pk = 1
+        super().save(*args, **kwargs)
+
+    @classmethod
+    def load(cls):
+        """The settings row, unsaved defaults if an admin has never saved one."""
+        return cls.objects.filter(pk=1).first() or cls(pk=1)
+
+    def stored_key(self, provider):
+        if provider == AIProvider.GEMINI:
+            return self.gemini_api_key
+        return self.anthropic_api_key

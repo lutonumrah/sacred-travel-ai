@@ -1,14 +1,15 @@
 from django.contrib import messages as django_messages
 from django.shortcuts import get_object_or_404, redirect
 from django.views import View
-from django.views.generic import DetailView, TemplateView
+from django.views.generic import DetailView, FormView, TemplateView
 
-from core.mixins import PageMixin
+from core.mixins import AdminRequiredMixin, PageMixin
 from core.selectors import paginate
+from core.services import log_audit
 
-from . import selectors, services
-from .forms import AgentReplyForm, HandoffForm, InboxFilterForm
-from .models import Conversation, ConversationStatus
+from . import ai, selectors, services
+from .forms import AgentReplyForm, AISettingsForm, HandoffForm, InboxFilterForm
+from .models import AISettings, Conversation, ConversationStatus
 
 
 class InboxView(PageMixin, TemplateView):
@@ -161,3 +162,65 @@ class WidgetPreviewView(PageMixin, TemplateView):
         ctx["website"] = website
         ctx["api_key"] = api_key
         return ctx
+
+
+class AISettingsView(AdminRequiredMixin, FormView):
+    template_name = "conversations/ai_settings.html"
+    form_class = AISettingsForm
+    page_title = "AI Settings"
+    page_subtitle = "Choose which AI model answers website chats, and its API key."
+    active_nav = "ai_settings"
+
+    def get_form_kwargs(self):
+        kwargs = super().get_form_kwargs()
+        kwargs["instance"] = AISettings.load()
+        return kwargs
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        stored = AISettings.load()
+        ctx["settings_row"] = stored
+        ctx["active"] = ai.resolve_config(stored)
+        ctx["key_source"] = (
+            "saved here" if ctx["active"] and stored.stored_key(stored.provider) else "server environment"
+        )
+        return ctx
+
+    def form_valid(self, form):
+        changed_keys = form.save(user=self.request.user)
+        stored = form.instance
+        log_audit(
+            actor=self.request.user,
+            action="ai_settings.update",
+            entity=stored,
+            # Never record the keys themselves — only which ones changed.
+            metadata={
+                "enabled": stored.enabled,
+                "provider": stored.provider,
+                "model": stored.model,
+                "keys_changed": changed_keys,
+            },
+            request=self.request,
+        )
+        if stored.enabled and ai.resolve_config(stored) is None:
+            django_messages.warning(
+                self.request,
+                f"Saved, but there is no {stored.get_provider_display()} API key — "
+                "chats will use rule-based replies until you add one.",
+            )
+        else:
+            django_messages.success(self.request, "AI settings saved.")
+        return redirect("conversations:ai_settings")
+
+
+class AISettingsTestView(AdminRequiredMixin, View):
+    """Checks the saved key and model against the provider. Generates nothing."""
+
+    def post(self, request):
+        config = ai.resolve_config(AISettings.load(), respect_enabled=False)
+        if config is None:
+            django_messages.error(request, "Save an API key for the selected provider first.")
+        else:
+            ok, message = ai.check_connection(config)
+            (django_messages.success if ok else django_messages.error)(request, message)
+        return redirect("conversations:ai_settings")

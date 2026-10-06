@@ -3,7 +3,7 @@ from datetime import date
 from decimal import Decimal
 from unittest import mock
 
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.urls import reverse
 
 from accounts.models import User
@@ -13,7 +13,7 @@ from websites.models import Website
 from websites.services import issue_api_key
 
 from . import ai, services
-from .models import Conversation, ConversationStatus, Message, MessageSender
+from .models import AISettings, Conversation, ConversationStatus, Message, MessageSender
 
 
 class ExtractionTests(TestCase):
@@ -157,7 +157,9 @@ class ClaudeLayerTests(TestCase):
         block = mock.Mock(type="text", text=json.dumps(payload))
         response = mock.Mock(content=[block], stop_reason=stop_reason)
         client = mock.Mock()
+        # Current models go through the beta endpoint (refusal fallbacks); older ones don't.
         client.messages.create.return_value = response
+        client.beta.messages.create.return_value = response
         return client
 
     def test_claude_reply_and_requirements_are_used(self):
@@ -230,7 +232,7 @@ class ClaudeLayerTests(TestCase):
 
     def test_an_api_failure_falls_back_to_the_rule_engine(self):
         client = mock.Mock()
-        client.messages.create.side_effect = RuntimeError("network down")
+        client.beta.messages.create.side_effect = RuntimeError("network down")
         with mock.patch.object(ai, "_client", return_value=client):
             result = ai.generate_reply(conversation=self.conversation, message="hotel in Goa")
         self.assertEqual(result.engine, "rules")
@@ -239,7 +241,7 @@ class ClaudeLayerTests(TestCase):
     def test_malformed_json_falls_back_to_the_rule_engine(self):
         block = mock.Mock(type="text", text="not json at all")
         client = mock.Mock()
-        client.messages.create.return_value = mock.Mock(content=[block], stop_reason="end_turn")
+        client.beta.messages.create.return_value = mock.Mock(content=[block], stop_reason="end_turn")
         with mock.patch.object(ai, "_client", return_value=client):
             result = ai.generate_reply(conversation=self.conversation, message="hotel in Goa")
         self.assertEqual(result.engine, "rules")
@@ -501,3 +503,163 @@ class InboxViewTests(TestCase):
                 conversation=conversation, sender_type=MessageSender.AGENT
             ).exists()
         )
+
+
+GOOD_ANSWER = {
+    "reply": "Palm Stay in Goa fits your budget.",
+    "requirements": {
+        "destination": "Goa",
+        "product_type": "hotel",
+        "travel_start": "",
+        "travel_end": "",
+        "travelers": 2,
+        "budget_max": 0,
+    },
+    "recommended_ids": [],
+    "should_handoff": False,
+    "handoff_reason": "",
+}
+
+
+@override_settings(ANTHROPIC_API_KEY="", GEMINI_API_KEY="", AI_MODEL="claude-opus-5-5")
+class AIConfigTests(TestCase):
+    def test_nothing_configured_means_rules_only(self):
+        self.assertIsNone(ai.resolve_config())
+
+    def test_environment_key_is_the_fallback(self):
+        with self.settings(ANTHROPIC_API_KEY="env-key"):
+            config = ai.resolve_config()
+        self.assertEqual((config.provider, config.model, config.api_key), ("anthropic", "claude-opus-5-5", "env-key"))
+
+    def test_saved_settings_beat_the_environment(self):
+        AISettings.objects.create(provider="gemini", model="gemini-3.8-flash", gemini_api_key="saved")
+        with self.settings(GEMINI_API_KEY="env-key"):
+            config = ai.resolve_config()
+        self.assertEqual((config.provider, config.model, config.api_key), ("gemini", "gemini-3.8-flash", "saved"))
+
+    def test_switched_off_means_rules_only(self):
+        AISettings.objects.create(enabled=False, anthropic_api_key="saved")
+        self.assertIsNone(ai.resolve_config())
+        self.assertIsNotNone(ai.resolve_config(respect_enabled=False))
+
+    def test_older_claude_models_skip_thinking_and_fallbacks(self):
+        AISettings.objects.create(model="claude-haiku-4-5", anthropic_api_key="k")
+        client = mock.Mock()
+        block = mock.Mock(type="text", text=json.dumps(GOOD_ANSWER))
+        client.messages.create.return_value = mock.Mock(content=[block], stop_reason="end_turn")
+        conversation = Conversation.objects.create(session_key="h1")
+        with mock.patch.object(ai, "_client", return_value=client):
+            result = ai.generate_reply(conversation=conversation, message="hotel")
+        self.assertEqual(result.engine, "claude")
+        kwargs = client.messages.create.call_args.kwargs
+        self.assertNotIn("thinking", kwargs)
+        self.assertNotIn("effort", kwargs["output_config"])
+        client.beta.messages.create.assert_not_called()
+
+
+@override_settings(ANTHROPIC_API_KEY="", GEMINI_API_KEY="")
+class GeminiLayerTests(TestCase):
+    """Gemini is exercised with a stubbed HTTP call — no network."""
+
+    def setUp(self):
+        self.goa = Destination.objects.create(name="Goa", code="goa")
+        self.hotel = Hotel.objects.create(name="Palm Stay", destination=self.goa, base_price=Decimal("3000"))
+        AISettings.objects.create(provider="gemini", model="gemini-3.8-flash", gemini_api_key="g-key")
+        self.conversation = Conversation.objects.create(session_key="g1")
+
+    def _reply(self, text, finish="STOP"):
+        return {"candidates": [{"content": {"parts": [{"text": text}]}, "finishReason": finish}]}
+
+    def test_gemini_answer_is_used(self):
+        answer = dict(GOOD_ANSWER, recommended_ids=[f"hotel:{self.hotel.pk}"])
+        with mock.patch.object(ai, "_gemini_request", return_value=self._reply(json.dumps(answer))) as call:
+            result = ai.generate_reply(
+                conversation=self.conversation,
+                message="hotel in Goa",
+                history=[{"role": "user", "content": "hi"}, {"role": "assistant", "content": "Hello"}],
+            )
+        self.assertEqual(result.engine, "gemini")
+        self.assertEqual(result.reply, GOOD_ANSWER["reply"])
+        self.assertEqual(result.recommendations[0]["name"], "Palm Stay")
+        url, key, body = call.call_args.args
+        self.assertTrue(url.endswith("/models/gemini-3.8-flash:generateContent"))
+        self.assertEqual(key, "g-key")
+        self.assertEqual([c["role"] for c in body["contents"]], ["user", "model", "user"])
+        self.assertEqual(body["generationConfig"]["responseMimeType"], "application/json")
+
+    def test_a_safety_block_hands_off_to_a_human(self):
+        with mock.patch.object(ai, "_gemini_request", return_value=self._reply("", finish="SAFETY")):
+            result = ai.generate_reply(conversation=self.conversation, message="hotel in Goa")
+        self.assertTrue(result.should_handoff)
+
+    def test_a_network_failure_falls_back_to_rules(self):
+        import urllib.error
+
+        with mock.patch.object(ai, "_gemini_request", side_effect=urllib.error.URLError("down")):
+            result = ai.generate_reply(conversation=self.conversation, message="hotel in Goa")
+        self.assertEqual(result.engine, "rules")
+
+    def test_check_connection_reports_an_unknown_model(self):
+        import urllib.error
+
+        error = urllib.error.HTTPError("u", 404, "Not Found", {}, None)
+        config = ai.resolve_config()
+        with mock.patch.object(ai, "_gemini_request", side_effect=error):
+            ok, message = ai.check_connection(config)
+        self.assertFalse(ok)
+        self.assertIn("gemini-3.8-flash", message)
+
+
+@override_settings(ANTHROPIC_API_KEY="", GEMINI_API_KEY="")
+class AISettingsPageTests(TestCase):
+    def setUp(self):
+        self.admin = User.objects.create_user("boss", password="pw", role="admin")
+        self.agent = User.objects.create_user("agent", password="pw", role="employee")
+        self.url = reverse("conversations:ai_settings")
+
+    def _post(self, **overrides):
+        data = {"enabled": "on", "provider": "anthropic", "model": "claude-opus-5-5", "custom_model": ""}
+        data.update(overrides)
+        return self.client.post(self.url, data)
+
+    def test_only_admins_can_open_it(self):
+        self.client.force_login(self.agent)
+        self.assertRedirects(self.client.get(self.url), reverse("dashboard:overview"))
+        self.client.force_login(self.admin)
+        self.assertEqual(self.client.get(self.url).status_code, 200)
+
+    def test_saving_a_key_never_echoes_it_back(self):
+        self.client.force_login(self.admin)
+        self._post(anthropic_api_key="sk-ant-secret-value-1234")
+        stored = AISettings.load()
+        self.assertEqual(stored.anthropic_api_key, "sk-ant-secret-value-1234")
+        self.assertEqual(stored.updated_by, self.admin)
+        page = self.client.get(self.url).content.decode()
+        self.assertNotIn("sk-ant-secret-value-1234", page)
+        self.assertIn("1234", page)  # the masked hint
+
+    def test_a_blank_key_keeps_the_saved_one_and_clear_removes_it(self):
+        AISettings.objects.create(anthropic_api_key="keep-me-please-0001")
+        self.client.force_login(self.admin)
+        self._post(model="claude-sonnet-5-5")
+        self.assertEqual(AISettings.load().anthropic_api_key, "keep-me-please-0001")
+        self.assertEqual(AISettings.load().model, "claude-sonnet-5-5")
+        self._post(clear_anthropic_key="on")
+        self.assertEqual(AISettings.load().anthropic_api_key, "")
+
+    def test_model_must_match_the_provider_unless_typed_in(self):
+        self.client.force_login(self.admin)
+        response = self._post(provider="gemini", model="claude-opus-5-5")
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(AISettings.objects.exists())
+        self._post(provider="gemini", model="claude-opus-5-5", custom_model="gemini-4-flash")
+        self.assertEqual(AISettings.load().model, "gemini-4-flash")
+
+    def test_the_audit_log_records_the_change_but_not_the_key(self):
+        from accounts.models import AuditLog
+
+        self.client.force_login(self.admin)
+        self._post(gemini_api_key="AIza-secret", provider="gemini", model="gemini-3.8-flash")
+        entry = AuditLog.objects.get(action="ai_settings.update")
+        self.assertEqual(entry.metadata["keys_changed"], ["gemini_api_key"])
+        self.assertNotIn("AIza-secret", json.dumps(entry.metadata))

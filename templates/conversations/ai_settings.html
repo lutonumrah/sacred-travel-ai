@@ -1,0 +1,68 @@
+{% extends "layouts/base.html" %}
+
+{% block content %}
+  <div class="panel">
+    <div class="panel-head">
+      <h2>Currently answering chats</h2>
+      {% if active %}
+        <span class="badge ok">AI on</span>
+      {% else %}
+        <span class="badge grey">Rule-based</span>
+      {% endif %}
+    </div>
+    {% if active %}
+      <p><strong>{{ settings_row.get_provider_display }}</strong> · <code>{{ active.model }}</code>
+        <span class="muted">— API key {{ key_source }}.</span></p>
+    {% elif not settings_row.enabled %}
+      <p class="muted">AI replies are switched off. The chat answers with built-in templates and still captures leads.</p>
+    {% else %}
+      <p class="muted">No {{ settings_row.get_provider_display }} API key yet, so the chat answers with built-in templates. Add a key below.</p>
+    {% endif %}
+    {% if settings_row.updated_by %}
+      <p class="muted small">Last changed by {{ settings_row.updated_by }} on {{ settings_row.updated_at|date:"j M Y, H:i" }}.</p>
+    {% endif %}
+    <form method="post" action="{% url 'conversations:ai_settings_test' %}" class="form-actions">
+      {% csrf_token %}
+      <button class="btn secondary" type="submit">Test connection</button>
+      <span class="muted small">Checks the saved key and model with the provider. Costs nothing.</span>
+    </form>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head"><h2>Settings</h2></div>
+    <form method="post" autocomplete="off">
+      {% csrf_token %}
+      {% include "partials/_form.html" with form=form %}
+      <div class="form-actions">
+        <button class="btn" type="submit">Save settings</button>
+      </div>
+    </form>
+    <p class="muted small">Get keys from <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com</a> (Claude) or <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com</a> (Gemini). Saved keys are never shown again — type a new one to replace it.</p>
+  </div>
+
+  <script>
+    // Show only the models that belong to the chosen provider.
+    (function () {
+      var provider = document.getElementById("id_provider");
+      var model = document.getElementById("id_model");
+      if (!provider || !model) return;
+      var groups = { anthropic: "Claude", gemini: "Gemini" };
+      function sync() {
+        var wanted = groups[provider.value];
+        var firstVisible = null, selectedVisible = false;
+        Array.prototype.forEach.call(model.querySelectorAll("optgroup"), function (group) {
+          var show = group.label === wanted;
+          group.hidden = !show;
+          group.disabled = !show;
+          if (show) {
+            firstVisible = firstVisible || group.querySelector("option");
+            if (group.querySelector("option:checked")) selectedVisible = true;
+          }
+        });
+        if (!selectedVisible && firstVisible) firstVisible.selected = true;
+      }
+      provider.addEventListener("change", sync);
+      sync();
+    })();
+  </script>
+{% endblock %}

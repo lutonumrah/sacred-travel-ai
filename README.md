@@ -74,11 +74,13 @@ message and merges them with everything learned in earlier turns:
 
 It then searches live inventory for matches, honouring per-website visibility.
 
-**Layer 2 — Claude (optional).** With `ANTHROPIC_API_KEY` set, the extracted
-requirements and the *already-retrieved* inventory go to Claude, which writes
-the customer-facing reply, refines the requirements and decides whether a human
-should step in. Claude only ever picks from the inventory the rules layer
-retrieved, so **it cannot invent a hotel, a price or availability**. Any
+**Layer 2 — Claude or Gemini (optional).** An admin picks the provider, model
+and API key under **AI Settings** in the dashboard (keys are write-only and never
+shown again; *Test connection* checks them for free). The extracted
+requirements and the *already-retrieved* inventory go to that model, which
+writes the customer-facing reply, refines the requirements and decides whether a
+human should step in. The model only ever picks from the inventory the rules
+layer retrieved, so **it cannot invent a hotel, a price or availability**. Any
 failure — no key, no network, malformed output, a refusal — falls back to the
 templated reply. The transcript records which engine answered each turn.
 
@@ -215,8 +217,8 @@ All settings come from `.env` (see `.env.example`).
 
 | Variable | Effect when unset |
 |---|---|
-| `ANTHROPIC_API_KEY` | Chat runs on the rule-based engine |
-| `AI_MODEL` | Defaults to `claude-opus-5` |
+| `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` | Fallback when no key is saved under AI Settings; with neither, chat runs on the rule-based engine |
+| `AI_MODEL` | Claude model used until an admin saves AI Settings; defaults to `claude-opus-5-5` |
 | `AI_ENABLED` | Set `false` to force the rule engine even with a key |
 | `RAZORPAY_KEY_ID` / `_SECRET` | Payments run in simulation mode |
 | `RAZORPAY_WEBHOOK_SECRET` | Webhooks verified against the simulation secret |

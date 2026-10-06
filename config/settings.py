@@ -177,10 +177,13 @@ BOOKING_TAX_PERCENT = Decimal(os.getenv("BOOKING_TAX_PERCENT", "5"))
 
 # --- AI chat engine ------------------------------------------------------
 # The conversation engine always runs its deterministic rule layer (intent and
-# requirement extraction + inventory matching). When an Anthropic API key is
-# present it additionally asks Claude to write the customer-facing reply.
+# requirement extraction + inventory matching). When an API key is present it
+# additionally asks Claude or Gemini to write the customer-facing reply.
+# Provider, model and keys are normally set by an admin under AI Settings in the
+# dashboard; these variables are the fallback when nothing is saved there.
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-AI_MODEL = os.getenv("AI_MODEL", "claude-opus-5")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+AI_MODEL = os.getenv("AI_MODEL", "claude-opus-5-5")
 AI_ENABLED = os.getenv("AI_ENABLED", "true").lower() in ("1", "true", "yes")
 AI_MAX_HISTORY = int(os.getenv("AI_MAX_HISTORY", "20"))
 AI_TIMEOUT_SECONDS = float(os.getenv("AI_TIMEOUT_SECONDS", "30"))

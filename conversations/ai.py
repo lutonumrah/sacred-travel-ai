@@ -7,11 +7,13 @@ Two engines, always in this order:
    details — and matches them against live inventory for that website. This is
    what creates leads and recommendations, so the system keeps working with no
    API key and no network.
-2. **Claude** (optional). When `ANTHROPIC_API_KEY` is set, the extracted
-   requirements plus the matched inventory are handed to Claude, which writes
-   the customer-facing reply, refines the requirements and decides whether a
-   human should take over. Claude only ever picks from inventory the rules layer
-   already retrieved, so it cannot invent hotels or prices.
+2. **Model** (optional). When an API key is configured — under AI Settings in
+   the dashboard, or ANTHROPIC_API_KEY / GEMINI_API_KEY in the environment — the
+   extracted requirements plus the matched inventory are handed to Claude or
+   Gemini, which writes the customer-facing reply, refines the requirements and
+   decides whether a human should take over. The model only ever picks from
+   inventory the rules layer already retrieved, so it cannot invent hotels or
+   prices.
 
 Any failure in step 2 falls back to the templated reply from step 1.
 """
@@ -21,12 +23,17 @@ from __future__ import annotations
 import json
 import logging
 import re
+import urllib.error
+import urllib.parse
+import urllib.request
 from dataclasses import dataclass, field
 from datetime import date, datetime
 
 from django.conf import settings
 
 from inventory.selectors import search_inventory
+
+from .models import DEFAULT_MODEL, AIProvider, AISettings
 
 logger = logging.getLogger(__name__)
 
@@ -292,7 +299,7 @@ def _money(item):
 
 
 def compose_rule_reply(message, requirements, recommendations, brand):
-    """Deterministic reply used when Claude is unavailable."""
+    """Deterministic reply used when no AI model is available."""
     lowered = message.strip().lower()
 
     if any(lowered.startswith(word) for word in GREETING_WORDS) and len(lowered) < 30:
@@ -350,7 +357,7 @@ def _missing_fields(requirements):
 
 
 # --------------------------------------------------------------------------
-# Claude layer
+# Model layer (Claude or Gemini)
 # --------------------------------------------------------------------------
 
 RESPONSE_SCHEMA = {
@@ -426,18 +433,37 @@ Inventory available for this website:
 {inventory}"""
 
 
-def _client():
-    api_key = getattr(settings, "ANTHROPIC_API_KEY", "")
-    if not api_key or not getattr(settings, "AI_ENABLED", True):
+@dataclass(frozen=True)
+class AIConfig:
+    """The provider, model and key one chat turn will use."""
+
+    provider: str
+    model: str
+    api_key: str
+
+
+def resolve_config(stored=None, *, respect_enabled=True):
+    """Work out which AI to call, or None when replies stay rule-based.
+
+    Saved AI Settings win; the environment fills in anything left blank.
+    """
+    if respect_enabled and not getattr(settings, "AI_ENABLED", True):
         return None
-    try:
-        import anthropic
-    except ImportError:
-        logger.info("anthropic SDK not installed — using the rule-based chat engine.")
+    stored = stored or AISettings.load()
+    if respect_enabled and not stored.enabled:
         return None
-    return anthropic.Anthropic(
-        api_key=api_key, timeout=getattr(settings, "AI_TIMEOUT_SECONDS", 30)
-    )
+
+    provider = stored.provider
+    env_key = {
+        AIProvider.ANTHROPIC: getattr(settings, "ANTHROPIC_API_KEY", ""),
+        AIProvider.GEMINI: getattr(settings, "GEMINI_API_KEY", ""),
+    }.get(provider, "")
+    api_key = stored.stored_key(provider) or env_key
+    if not api_key:
+        return None
+    # Never saved by an admin: the environment's AI_MODEL decides.
+    model = getattr(settings, "AI_MODEL", "") if stored._state.adding else stored.model
+    return AIConfig(provider=provider, model=model or DEFAULT_MODEL[provider], api_key=api_key)
 
 
 def _inventory_block(items):
@@ -453,43 +479,93 @@ def _inventory_block(items):
     return "\n".join(lines)
 
 
-def _ask_claude(*, brand, requirements, inventory, history, message):
-    client = _client()
-    if client is None:
-        return None
-
-    system = SYSTEM_PROMPT.format(
+def _system_prompt(*, brand, requirements, inventory):
+    return SYSTEM_PROMPT.format(
         brand=brand,
         known=json.dumps(requirements, default=str) if requirements else "nothing yet",
         inventory=_inventory_block(inventory),
     )
-    messages = list(history) + [{"role": "user", "content": message}]
+
+
+def _handoff_answer(requirements, reason):
+    return {
+        "reply": "Let me bring in one of our travel consultants to help you with this.",
+        "requirements": requirements,
+        "recommended_ids": [],
+        "should_handoff": True,
+        "handoff_reason": reason,
+    }
+
+
+# --- Claude ---------------------------------------------------------------
+
+# Older models that reject adaptive thinking and `effort`.
+CLAUDE_NO_THINKING_PREFIXES = (
+    "claude-haiku-4-5",
+    "claude-sonnet-4-5",
+    "claude-opus-4-5",
+    "claude-opus-4-1",
+    "claude-opus-4-0",
+    "claude-sonnet-4-0",
+    "claude-3",
+)
+# Models that accept the server-side refusal fallback: if a safety classifier
+# declines a chat turn, the API retries it on another model in the same call.
+CLAUDE_FALLBACK_MODELS = {
+    "claude-fable-5-1",
+    "claude-opus-5-5",
+    "claude-opus-5",
+    "claude-sonnet-5-5",
+}
+
+
+def _client(config=None):
+    if config is None:
+        config = resolve_config()
+    if config is None or config.provider != AIProvider.ANTHROPIC:
+        return None
+    try:
+        import anthropic
+    except ImportError:
+        logger.info("anthropic SDK not installed — using the rule-based chat engine.")
+        return None
+    return anthropic.Anthropic(
+        api_key=config.api_key, timeout=getattr(settings, "AI_TIMEOUT_SECONDS", 30)
+    )
+
+
+def _ask_claude(config, *, system, requirements, history, message):
+    client = _client(config)
+    if client is None:
+        return None
+
+    model = config.model if config else getattr(settings, "AI_MODEL", DEFAULT_MODEL["anthropic"])
+    output_config = {"format": {"type": "json_schema", "schema": RESPONSE_SCHEMA}}
+    params = {
+        "model": model,
+        "max_tokens": 8000,
+        "system": system,
+        "messages": list(history) + [{"role": "user", "content": message}],
+    }
+    if not model.startswith(CLAUDE_NO_THINKING_PREFIXES):
+        params["thinking"] = {"type": "adaptive"}
+        output_config["effort"] = "low"
+    params["output_config"] = output_config
 
     try:
-        response = client.messages.create(
-            model=getattr(settings, "AI_MODEL", "claude-opus-5"),
-            max_tokens=2000,
-            system=system,
-            messages=messages,
-            thinking={"type": "adaptive"},
-            output_config={
-                "effort": "low",
-                "format": {"type": "json_schema", "schema": RESPONSE_SCHEMA},
-            },
-        )
+        if model in CLAUDE_FALLBACK_MODELS:
+            response = client.beta.messages.create(
+                betas=["server-side-fallback-2026-07-01"], fallbacks="default", **params
+            )
+        else:
+            response = client.messages.create(**params)
     except Exception:
         logger.exception("Claude call failed — falling back to the rule-based reply.")
         return None
 
     if getattr(response, "stop_reason", None) == "refusal":
         logger.warning("Claude declined this chat turn; handing off to a human.")
-        return {
-            "reply": "Let me bring in one of our travel consultants to help you with this.",
-            "requirements": requirements,
-            "recommended_ids": [],
-            "should_handoff": True,
-            "handoff_reason": "AI declined to answer",
-        }
+        return _handoff_answer(requirements, "AI declined to answer")
 
     try:
         text = next(block.text for block in response.content if block.type == "text")
@@ -499,8 +575,126 @@ def _ask_claude(*, brand, requirements, inventory, history, message):
         return None
 
 
+# --- Gemini ---------------------------------------------------------------
+
+GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta"
+GEMINI_BLOCKED_REASONS = {"SAFETY", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII"}
+
+
+def _gemini_model_path(model):
+    model = model.removeprefix("models/")
+    return f"{GEMINI_API_BASE}/models/{urllib.parse.quote(model, safe='.-_')}"
+
+
+def _gemini_request(url, api_key, body=None):
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(body).encode() if body is not None else None,
+        headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
+        method="POST" if body is not None else "GET",
+    )
+    timeout = getattr(settings, "AI_TIMEOUT_SECONDS", 30)
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return json.load(response)
+
+
+def _ask_gemini(config, *, system, requirements, history, message):
+    contents = [
+        {
+            "role": "model" if turn["role"] == "assistant" else "user",
+            "parts": [{"text": str(turn["content"])}],
+        }
+        for turn in history
+    ]
+    contents.append({"role": "user", "parts": [{"text": message}]})
+    body = {
+        "systemInstruction": {"parts": [{"text": system}]},
+        "contents": contents,
+        "generationConfig": {
+            "responseMimeType": "application/json",
+            "responseJsonSchema": RESPONSE_SCHEMA,
+        },
+    }
+
+    try:
+        data = _gemini_request(f"{_gemini_model_path(config.model)}:generateContent", config.api_key, body)
+    except urllib.error.HTTPError as exc:
+        detail = exc.read()[:500].decode(errors="replace")
+        logger.error("Gemini call failed (%s): %s — falling back to rules.", exc.code, detail)
+        return None
+    except (urllib.error.URLError, TimeoutError, ValueError):
+        logger.exception("Gemini call failed — falling back to the rule-based reply.")
+        return None
+
+    candidates = data.get("candidates") or []
+    if not candidates:
+        reason = (data.get("promptFeedback") or {}).get("blockReason", "no answer")
+        logger.warning("Gemini returned no candidates (%s); handing off to a human.", reason)
+        return _handoff_answer(requirements, "AI declined to answer")
+    candidate = candidates[0]
+    if candidate.get("finishReason") in GEMINI_BLOCKED_REASONS:
+        logger.warning("Gemini blocked this chat turn (%s).", candidate.get("finishReason"))
+        return _handoff_answer(requirements, "AI declined to answer")
+
+    parts = (candidate.get("content") or {}).get("parts") or []
+    text = "".join(part.get("text", "") for part in parts if not part.get("thought"))
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        logger.exception("Could not read structured output from Gemini.")
+        return None
+
+
+def _ask_model(*, brand, requirements, inventory, history, message):
+    """Ask the configured AI for this turn. Returns (answer, engine) or (None, "")."""
+    config = resolve_config()
+    system = _system_prompt(brand=brand, requirements=requirements, inventory=inventory)
+    turn = {"system": system, "requirements": requirements, "history": history, "message": message}
+    if config is not None and config.provider == AIProvider.GEMINI:
+        return _ask_gemini(config, **turn), "gemini"
+    return _ask_claude(config, **turn), "claude"
+
+
+def check_connection(config):
+    """Confirm a key works and the model exists, without generating anything.
+
+    Returns (ok, message) for the settings page.
+    """
+    if config.provider == AIProvider.GEMINI:
+        try:
+            info = _gemini_request(_gemini_model_path(config.model), config.api_key)
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404:
+                return False, f"Gemini has no model called {config.model}."
+            if exc.code in (400, 401, 403):
+                return False, "Google rejected the Gemini API key."
+            return False, f"Gemini returned HTTP {exc.code}."
+        except (urllib.error.URLError, TimeoutError, ValueError) as exc:
+            return False, f"Could not reach Gemini: {exc}"
+        return True, f"Connected — {info.get('displayName') or config.model} is available."
+
+    try:
+        import anthropic
+    except ImportError:
+        return False, "The anthropic package is not installed on the server."
+    client = _client(config)
+    try:
+        info = client.models.retrieve(config.model)
+    except anthropic.AuthenticationError:
+        return False, "Anthropic rejected the API key."
+    except anthropic.PermissionDeniedError:
+        return False, "This API key is not allowed to use that model."
+    except anthropic.NotFoundError:
+        return False, f"Anthropic has no model called {config.model}."
+    except anthropic.APIConnectionError:
+        return False, "Could not reach Anthropic."
+    except anthropic.APIStatusError as exc:
+        return False, f"Anthropic returned HTTP {exc.status_code}."
+    return True, f"Connected — {info.display_name or config.model} is available."
+
+
 def _select_by_ids(inventory, ids):
-    """Resolve the ids Claude returned back to real inventory dicts."""
+    """Resolve the ids the model returned back to real inventory dicts."""
     by_key = {f"{item['inventory_type']}:{item['id']}": item for item in inventory}
     picked = [by_key[key] for key in ids if key in by_key]
     return picked or inventory[:3]
@@ -523,7 +717,7 @@ def generate_reply(*, conversation, message, history=None):
     inventory = match_inventory(requirements, website=website, limit=6)
     handoff, handoff_reason = detect_handoff(message)
 
-    claude = _ask_claude(
+    answer, engine = _ask_model(
         brand=brand,
         requirements=requirements,
         inventory=inventory,
@@ -531,22 +725,22 @@ def generate_reply(*, conversation, message, history=None):
         message=message,
     )
 
-    if claude:
+    if answer:
         merged = dict(requirements)
-        for key, value in (claude.get("requirements") or {}).items():
+        for key, value in (answer.get("requirements") or {}).items():
             if value not in (None, "", 0):
                 merged[key] = value
-        recommendations = _select_by_ids(inventory, claude.get("recommended_ids") or [])
-        claude_handoff = bool(claude.get("should_handoff"))
+        recommendations = _select_by_ids(inventory, answer.get("recommended_ids") or [])
+        model_handoff = bool(answer.get("should_handoff"))
         return AIResult(
-            reply=claude.get("reply") or compose_rule_reply(
+            reply=answer.get("reply") or compose_rule_reply(
                 message, merged, recommendations, brand
             ),
             requirements=merged,
             recommendations=recommendations,
-            should_handoff=handoff or claude_handoff,
-            handoff_reason=handoff_reason or claude.get("handoff_reason", ""),
-            engine="claude",
+            should_handoff=handoff or model_handoff,
+            handoff_reason=handoff_reason or answer.get("handoff_reason", ""),
+            engine=engine,
             contact=contact,
         )
 

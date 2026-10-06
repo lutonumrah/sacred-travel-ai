@@ -48,6 +48,7 @@
         <a href="{% url 'dashboard:analytics' %}" class="{% if active_nav == 'analytics' %}active{% endif %}">Analytics</a>
         {% if user.is_admin %}
           <a href="{% url 'accounts:users' %}" class="{% if active_nav == 'users' %}active{% endif %}">Users &amp; Roles</a>
+          <a href="{% url 'conversations:ai_settings' %}" class="{% if active_nav == 'ai_settings' %}active{% endif %}">AI Settings</a>
         {% endif %}
       </nav>
       <div class="sidebar-footer">
