@@ -57,6 +57,8 @@ def sees_everything(user):
 def visible_leads(user):
     """Managers see every lead; employees their own, unassigned ones and their teams'.
 
+    "Unassigned" means no owner and no team.
+
     A lead handed to a team (with or without a named owner) is visible to every
     member of that team, and with it its follow-ups and bookings.
     """
@@ -66,7 +68,9 @@ def visible_leads(user):
 
         queryset = queryset.filter(
             Q(assigned_to=user)
-            | Q(assigned_to__isnull=True)
+            # Unassigned means nobody at all: a lead handed to a team without a
+            # named owner belongs to that team, not to every employee.
+            | Q(assigned_to__isnull=True, assigned_team__isnull=True)
             | Q(assigned_team__in=Team.objects.filter(members=user).values("pk"))
         )
     return queryset
