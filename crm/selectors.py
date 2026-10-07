@@ -14,6 +14,36 @@ PIPELINE_ORDER = [
 ]
 
 
+# Travel preferences the chat extracts, in display order.
+PREFERENCE_LABELS = (
+    ("hotel_stars", "Hotel stars"),
+    ("amenities", "Amenities"),
+    ("food", "Food"),
+    ("car_type", "Car type"),
+    ("transmission", "Transmission"),
+    ("trip_style", "Trip style"),
+    ("product_type", "Looking for"),
+    ("nights", "Nights"),
+    ("notes", "Notes"),
+)
+
+
+def preference_rows(preferences):
+    """`[(label, text)]` for the known preferences, skipping blanks."""
+    preferences = preferences or {}
+    rows = []
+    for key, label in PREFERENCE_LABELS:
+        value = preferences.get(key)
+        if value in (None, "", 0, [], {}):
+            continue
+        if key == "hotel_stars":
+            value = f"{value}-star or better"
+        elif isinstance(value, (list, tuple)):
+            value = ", ".join(str(item) for item in value)
+        rows.append((label, value))
+    return rows
+
+
 def sees_everything(user):
     return user.is_superuser or user.is_manager
 

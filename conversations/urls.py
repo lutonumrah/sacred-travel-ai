@@ -15,4 +15,6 @@ urlpatterns = [
     path("<int:pk>/take-over/", views.ConversationTakeOverView.as_view(), name="take_over"),
     path("<int:pk>/resume-ai/", views.ConversationResumeAIView.as_view(), name="resume_ai"),
     path("<int:pk>/close/", views.ConversationCloseView.as_view(), name="close"),
+    path("<int:pk>/assign/", views.ConversationAssignView.as_view(), name="assign"),
+    path("<int:pk>/book/", views.ConversationBookView.as_view(), name="book"),
 ]

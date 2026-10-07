@@ -10,6 +10,16 @@ from .models import Customer, Lead, LeadActivity, LeadNote, LeadStatus
 # Statuses that mean the lead is no longer being actively worked.
 CLOSED_STATUSES = {LeadStatus.CONVERTED, LeadStatus.LOST}
 
+# How far along the pipeline each open status is, for automatic moves that must
+# only ever go forward. Follow-up sits beside Qualified: a person put it there.
+PIPELINE_RANK = {
+    LeadStatus.NEW: 0,
+    LeadStatus.QUALIFIED: 1,
+    LeadStatus.FOLLOW_UP: 1,
+    LeadStatus.INTERESTED: 2,
+    LeadStatus.PAYMENT_PENDING: 3,
+}
+
 
 def score_lead(lead):
     """Heuristic 0–100 score used to sort the pipeline and flag hot leads.
@@ -120,7 +130,7 @@ def update_lead(*, lead, actor=None, request=None, changed_fields=None):
 
 
 @transaction.atomic
-def change_status(*, lead, status, actor=None, request=None, lost_reason=""):
+def change_status(*, lead, status, actor=None, request=None, lost_reason="", note=""):
     """Move a lead through the pipeline, recording history and notifying."""
     previous = lead.status
     if previous == status:
@@ -140,7 +150,7 @@ def change_status(*, lead, status, actor=None, request=None, lost_reason=""):
         actor=actor,
         activity_type="status_change",
         summary=f"{LeadStatus(previous).label} → {LeadStatus(status).label}",
-        details={"from": previous, "to": status, "lost_reason": lost_reason},
+        details={"from": previous, "to": status, "lost_reason": lost_reason, "note": note},
     )
     log_audit(
         actor=actor,
@@ -169,6 +179,43 @@ def change_status(*, lead, status, actor=None, request=None, lost_reason=""):
             metadata={"lead_id": lead.pk},
         )
     return lead
+
+
+def advance_status(*, lead, status, note="", actor=None, request=None):
+    """Automatic pipeline move: forward only, and never out of Converted or Lost.
+
+    Returns True when the lead moved.
+    """
+    current = PIPELINE_RANK.get(lead.status)
+    target = PIPELINE_RANK.get(status)
+    if current is None or target is None or target <= current:
+        return False
+    change_status(lead=lead, status=status, actor=actor, request=request, note=note)
+    return True
+
+
+def is_qualified(lead, requirements):
+    """Destination, when, how many, and a way to reach the customer are all known."""
+    requirements = requirements or {}
+    customer = lead.customer
+    has_contact = bool(customer and (customer.email or customer.phone))
+    has_when = bool(
+        lead.travel_start or requirements.get("travel_start") or requirements.get("travel_month")
+    )
+    # `travelers_count` defaults to 1, so only an explicit answer counts.
+    has_party = bool(requirements.get("travelers"))
+    return bool(lead.destination) and has_when and has_party and has_contact
+
+
+def qualify_if_ready(*, lead, requirements, request=None):
+    if lead.status == LeadStatus.NEW and is_qualified(lead, requirements):
+        return advance_status(
+            lead=lead,
+            status=LeadStatus.QUALIFIED,
+            note="Automatic: destination, dates, party size and contact captured",
+            request=request,
+        )
+    return False
 
 
 @transaction.atomic

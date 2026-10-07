@@ -68,6 +68,66 @@ PRODUCT_KEYWORDS = {
 
 GREETING_WORDS = ("hi", "hello", "hey", "namaste", "good morning", "good evening")
 
+# Travel preferences. Every key is always present (blank when unknown) so the
+# shape matches the strict JSON schema the models answer in.
+EMPTY_PREFERENCES = {
+    "hotel_stars": 0,
+    "amenities": [],
+    "food": "",
+    "car_type": "",
+    "transmission": "",
+    "trip_style": "",
+    "notes": "",
+}
+
+STAR_RE = re.compile(r"\b([1-7])\s*-?\s*(?:star|\*)", re.I)
+
+AMENITY_KEYWORDS = {
+    "pool": ("pool", "swimming"),
+    "breakfast": ("breakfast",),
+    "wifi": ("wifi", "wi-fi", "wi fi", "internet"),
+    "sea view": ("sea view", "sea-view", "sea facing", "sea-facing", "ocean view", "beach view"),
+    "spa": ("spa",),
+    "parking": ("parking",),
+    "gym": ("gym",),
+    "mountain view": ("mountain view", "valley view"),
+    "airport pickup": ("airport pickup", "airport transfer"),
+}
+
+# Checked in order: Jain food is vegetarian too, so it must win over "veg".
+FOOD_PATTERNS = (
+    ("jain", re.compile(r"\bjain\b", re.I)),
+    ("halal", re.compile(r"\bhalal\b", re.I)),
+    ("non-veg", re.compile(r"\bnon[\s-]?veg", re.I)),
+    ("veg", re.compile(r"(?<!non-)(?<!non )\b(?:pure\s+)?veg(?:etarian|gie|an)?\b", re.I)),
+)
+
+CAR_TYPE_KEYWORDS = (
+    ("tempo traveller", ("tempo traveller", "tempo traveler", "tempo", "minibus", "mini bus")),
+    ("suv", ("suv", "muv", "innova", "scorpio", "xuv", "ertiga")),
+    ("sedan", ("sedan", "dzire", "etios")),
+    ("hatchback", ("hatchback", "swift", "i20")),
+)
+
+TRANSMISSION_KEYWORDS = (
+    ("automatic", ("automatic", "auto transmission", "auto gear")),
+    ("manual", ("manual",)),
+)
+
+TRIP_STYLE_KEYWORDS = (
+    ("honeymoon", ("honeymoon", "romantic", "anniversary")),
+    ("pilgrimage", ("pilgrimage", "temple", "yatra", "darshan", "char dham", "tirth")),
+    ("adventure", ("adventure", "trek", "trekking", "rafting", "paragliding", "scuba", "camping")),
+    ("family", ("family", "kids", "children", "parents")),
+)
+
+MONTH_ONLY_PATTERN = re.compile(
+    r"\b(?:(in|during|around|by|this|next|early|mid|late|end of)\s+)?"
+    r"(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|"
+    r"sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b(?:\s+(\d{4}))?",
+    re.I,
+)
+
 
 @dataclass
 class AIResult:
@@ -249,6 +309,10 @@ def extract_requirements(text, previous=None):
         requirements["travel_start"] = dates[0].isoformat()
         if len(dates) > 1:
             requirements["travel_end"] = dates[-1].isoformat()
+    else:
+        month = _parse_travel_month(text)
+        if month:
+            requirements["travel_month"] = month
 
     nights = NIGHTS_RE.search(text)
     if nights and "nights" not in requirements:
@@ -260,7 +324,89 @@ def extract_requirements(text, previous=None):
     if budget_min:
         requirements["budget_min"] = budget_min
 
+    preferences = merge_preferences(requirements.get("preferences"), extract_preferences(text))
+    if has_preferences(preferences):
+        requirements["preferences"] = preferences
+
     return requirements
+
+
+def _keyword_in(lowered, words):
+    return any(re.search(rf"\b{re.escape(word)}\b", lowered) for word in words)
+
+
+def extract_preferences(text):
+    """Hotel, food, car and trip-style wishes stated in one message."""
+    lowered = text.lower()
+    found = dict(EMPTY_PREFERENCES, amenities=[])
+
+    stars = STAR_RE.search(text)
+    if stars:
+        found["hotel_stars"] = int(stars.group(1))
+    found["amenities"] = [
+        name for name, words in AMENITY_KEYWORDS.items() if _keyword_in(lowered, words)
+    ]
+    for value, pattern in FOOD_PATTERNS:
+        if pattern.search(text):
+            found["food"] = value
+            break
+    for field_name, table in (
+        ("car_type", CAR_TYPE_KEYWORDS),
+        ("transmission", TRANSMISSION_KEYWORDS),
+        ("trip_style", TRIP_STYLE_KEYWORDS),
+    ):
+        for value, words in table:
+            if _keyword_in(lowered, words):
+                found[field_name] = value
+                break
+    return found
+
+
+def merge_preferences(previous, new):
+    """Fold newly stated preferences into earlier ones.
+
+    Anything blank in `new` keeps the earlier value; amenities accumulate.
+    """
+    merged = dict(EMPTY_PREFERENCES, amenities=[])
+    for source in (previous, new):
+        if not isinstance(source, dict):
+            continue
+        for key, default in EMPTY_PREFERENCES.items():
+            value = source.get(key)
+            if key == "amenities":
+                for item in value if isinstance(value, list) else []:
+                    item = str(item).strip().lower()[:60]
+                    if item and item not in merged["amenities"]:
+                        merged["amenities"].append(item)
+            elif key == "hotel_stars":
+                try:
+                    stars = int(value or 0)
+                except (TypeError, ValueError):
+                    stars = 0
+                if 1 <= stars <= 7:
+                    merged[key] = stars
+            elif isinstance(value, str) and value.strip():
+                merged[key] = value.strip()[:500 if key == "notes" else 60]
+    return merged
+
+
+def has_preferences(preferences):
+    return any(value for value in (preferences or {}).values())
+
+
+def _parse_travel_month(text):
+    """`in December`, `dec 2027` → `2027-12`. A bare "may" is a verb, not a month."""
+    today = date.today()
+    for match in MONTH_ONLY_PATTERN.finditer(text):
+        lead_in, word, given_year = match.groups()
+        if not (lead_in or given_year):
+            continue
+        month = MONTH_NUMBERS[word.lower()[:3]]
+        year = int(given_year) if given_year else today.year
+        if not given_year and month < today.month:
+            year += 1
+        return f"{year:04d}-{month:02d}"
+    return ""
 
 
 def detect_handoff(text):
@@ -281,6 +427,7 @@ def match_inventory(requirements, website=None, limit=4):
         requirements.get(key) for key in ("destination", "product_type", "budget_max")
     ):
         return []
+    preferences = requirements.get("preferences") or {}
     return search_inventory(
         q="",
         inventory_type=requirements.get("product_type", ""),
@@ -288,6 +435,12 @@ def match_inventory(requirements, website=None, limit=4):
         max_price=requirements.get("budget_max"),
         website=website,
         limit=limit,
+        min_star_rating=preferences.get("hotel_stars") or None,
+        amenities=preferences.get("amenities") or (),
+        car_type=preferences.get("car_type") or "",
+        transmission=preferences.get("transmission") or "",
+        # A car must seat the whole party.
+        min_seats=requirements.get("travelers") or None,
     )
 
 
@@ -375,16 +528,66 @@ RESPONSE_SCHEMA = {
                 "product_type": {"type": "string", "enum": ["hotel", "car", "package", ""]},
                 "travel_start": {"type": "string"},
                 "travel_end": {"type": "string"},
+                "travel_month": {
+                    "type": "string",
+                    "description": "YYYY-MM when only the month is known.",
+                },
                 "travelers": {"type": "integer"},
+                "budget_min": {"type": "integer"},
                 "budget_max": {"type": "integer"},
+                "preferences": {
+                    "type": "object",
+                    "description": "Stated wishes only — never guess.",
+                    "properties": {
+                        "hotel_stars": {
+                            "type": "integer",
+                            "description": "Minimum hotel star rating asked for, 0 if none.",
+                        },
+                        "amenities": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Lowercase, e.g. pool, breakfast, wifi, sea view.",
+                        },
+                        "food": {
+                            "type": "string",
+                            "enum": ["veg", "jain", "halal", "non-veg", ""],
+                        },
+                        "car_type": {
+                            "type": "string",
+                            "enum": ["sedan", "suv", "hatchback", "tempo traveller", ""],
+                        },
+                        "transmission": {"type": "string", "enum": ["automatic", "manual", ""]},
+                        "trip_style": {
+                            "type": "string",
+                            "enum": ["honeymoon", "family", "pilgrimage", "adventure", ""],
+                        },
+                        "notes": {
+                            "type": "string",
+                            "description": "Any other wish worth passing to a consultant.",
+                        },
+                    },
+                    "required": [
+                        "hotel_stars",
+                        "amenities",
+                        "food",
+                        "car_type",
+                        "transmission",
+                        "trip_style",
+                        "notes",
+                    ],
+                    "additionalProperties": False,
+                },
             },
             "required": [
                 "destination",
                 "product_type",
                 "travel_start",
                 "travel_end",
+                "travel_month",
                 "travelers",
+                "budget_min",
                 "budget_max",
+                "preferences",
             ],
             "additionalProperties": False,
         },
@@ -424,7 +627,9 @@ number of travellers, budget.
 - Set should_handoff to true if the customer asks for a human, is upset, wants a refund \
 or a cancellation, or asks something you cannot answer from the inventory.
 - In `requirements`, carry forward everything already known and add anything new. Use \
-empty string or 0 for anything still unknown. Dates are YYYY-MM-DD.
+empty string, 0 or an empty list for anything still unknown. Dates are YYYY-MM-DD.
+- Record hotel, food, car and trip-style wishes in `requirements.preferences` only when \
+the customer actually states them.
 - In `recommended_ids`, return the ids of inventory items you referenced, best first.
 
 Known so far about this trip: {known}
@@ -727,9 +932,16 @@ def generate_reply(*, conversation, message, history=None):
 
     if answer:
         merged = dict(requirements)
-        for key, value in (answer.get("requirements") or {}).items():
-            if value not in (None, "", 0):
+        answered = answer.get("requirements") or {}
+        for key, value in answered.items():
+            if key != "preferences" and value not in (None, "", 0):
                 merged[key] = value
+        # A blank model field must not erase a preference the rules already found.
+        preferences = merge_preferences(
+            requirements.get("preferences"), answered.get("preferences")
+        )
+        if has_preferences(preferences):
+            merged["preferences"] = preferences
         recommendations = _select_by_ids(inventory, answer.get("recommended_ids") or [])
         model_handoff = bool(answer.get("should_handoff"))
         return AIResult(

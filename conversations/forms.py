@@ -1,6 +1,6 @@
 from django import forms
 
-from core.forms import StyledFormMixin
+from core.forms import DateInput, StyledFormMixin
 
 from .models import (
     CLAUDE_MODELS,
@@ -48,6 +48,60 @@ class WidgetChatForm(forms.Form):
     phone = forms.CharField(max_length=20, required=False)
 
 
+class WidgetBookForm(forms.Form):
+    """What the widget's "Book this" form sends. Prices never come from here."""
+
+    key = forms.CharField(max_length=64)
+    session = forms.CharField(max_length=64)
+    recommendation_id = forms.IntegerField(min_value=1)
+    name = forms.CharField(max_length=100, required=False)
+    email = forms.EmailField(required=False)
+    phone = forms.CharField(max_length=20, required=False)
+    travel_start = forms.DateField()
+    travel_end = forms.DateField(required=False)
+    travelers = forms.IntegerField(min_value=1, max_value=50)
+
+    def clean_phone(self):
+        phone = self.cleaned_data.get("phone", "").strip()
+        if not phone:
+            return ""
+        digits = "".join(ch for ch in phone if ch.isdigit())
+        if not 10 <= len(digits) <= 13:
+            raise forms.ValidationError("Enter a valid phone number.")
+        return digits
+
+    def clean(self):
+        data = super().clean()
+        start, end = data.get("travel_start"), data.get("travel_end")
+        if start and end and end < start:
+            self.add_error("travel_end", "The end date cannot be before the start date.")
+        return data
+
+
+class ConversationAssignForm(StyledFormMixin, forms.Form):
+    assigned_to = forms.ModelChoiceField(
+        queryset=None, required=False, empty_label="Unassigned", label="Assign to"
+    )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        from accounts.models import User
+        from core.mixins import SALES_ROLES
+
+        self.fields["assigned_to"].queryset = User.objects.filter(
+            is_active=True, is_active_employee=True, role__in=SALES_ROLES
+        ).order_by("username")
+
+
+class StaffBookForm(StyledFormMixin, forms.Form):
+    """An agent booking a recommendation on the customer's behalf."""
+
+    recommendation_id = forms.IntegerField(widget=forms.HiddenInput)
+    travel_start = forms.DateField(widget=DateInput())
+    travel_end = forms.DateField(required=False, widget=DateInput())
+    travelers = forms.IntegerField(min_value=1, max_value=50, initial=1)
+
+
 def _mask(key):
     return f"{key[:6]}…{key[-4:]}" if len(key) > 14 else "••••"
 
@@ -84,11 +138,30 @@ class AISettingsForm(StyledFormMixin, forms.Form):
         widget=forms.PasswordInput(render_value=False, attrs={"autocomplete": "off"}),
     )
     clear_gemini_key = forms.BooleanField(required=False, label="Remove saved Gemini key")
+    handoff_wait_minutes = forms.IntegerField(
+        required=False,
+        min_value=0,
+        max_value=1440,
+        label="Resume AI if no one picks up a handoff within (minutes)",
+        help_text="The customer is told a consultant is busy and the AI carries on. 0 = never.",
+    )
+    agent_idle_minutes = forms.IntegerField(
+        required=False,
+        min_value=0,
+        max_value=1440,
+        label="Resume AI if the agent leaves the customer waiting for (minutes)",
+        help_text="Counts from the customer's oldest unanswered message. 0 = never.",
+    )
 
     def __init__(self, *args, instance, **kwargs):
         self.instance = instance
         listed = {value for choices in MODELS_BY_PROVIDER.values() for value, _ in choices}
-        initial = {"enabled": instance.enabled, "provider": instance.provider}
+        initial = {
+            "enabled": instance.enabled,
+            "provider": instance.provider,
+            "handoff_wait_minutes": instance.handoff_wait_minutes,
+            "agent_idle_minutes": instance.agent_idle_minutes,
+        }
         if instance.model in listed:
             initial["model"] = instance.model
         else:
@@ -130,6 +203,9 @@ class AISettingsForm(StyledFormMixin, forms.Form):
         obj.enabled = data["enabled"]
         obj.provider = data["provider"]
         obj.model = data["resolved_model"]
+        for field_name in ("handoff_wait_minutes", "agent_idle_minutes"):
+            if data.get(field_name) is not None:
+                setattr(obj, field_name, data[field_name])
         changed = []
         for field, clear in (
             ("anthropic_api_key", "clear_anthropic_key"),

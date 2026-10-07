@@ -11,7 +11,18 @@
             <td class="mono small">{{ conversation.website.source_identifier|default:"—" }}</td>
             <td>{% if conversation.customer %}<a href="{% url 'crm:customer_detail' conversation.customer.pk %}">{{ conversation.customer.full_name }}</a>{% else %}<span class="muted">Anonymous</span>{% endif %}</td>
             <td><span class="badge status-{{ conversation.status }}">{{ conversation.get_status_display }}</span></td>
-            <td class="small">{{ conversation.assigned_to.get_username|default:"—" }}</td>
+            <td class="small">
+              {% if assignees %}
+                <form method="post" action="{% url 'conversations:assign' conversation.pk %}" class="assign-inline">
+                  {% csrf_token %}<input type="hidden" name="next" value="inbox">
+                  <select name="assigned_to" aria-label="Assign chat" onchange="this.form.submit()">
+                    <option value="">Unassigned</option>
+                    {% for person in assignees %}<option value="{{ person.pk }}" {% if person.pk == conversation.assigned_to_id %}selected{% endif %}>{{ person.get_username }}</option>{% endfor %}
+                  </select>
+                  <noscript><button class="btn small ghost" type="submit">Assign</button></noscript>
+                </form>
+              {% else %}{{ conversation.assigned_to.get_username|default:"—" }}{% endif %}
+            </td>
             <td class="right">{{ conversation.message_count }}</td>
             <td class="small nowrap">{{ conversation.last_message_at|date:"d M H:i"|default:"—" }}</td>
             <td class="actions"><a class="btn small ghost" href="{% url 'conversations:detail' conversation.pk %}">Open</a></td>

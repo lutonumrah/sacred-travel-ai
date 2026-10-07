@@ -3,13 +3,21 @@ from django.shortcuts import get_object_or_404, redirect
 from django.views import View
 from django.views.generic import DetailView, FormView, TemplateView
 
-from core.mixins import AdminRequiredMixin, SalesRequiredMixin
+from core.mixins import AdminRequiredMixin, ManagerRequiredMixin, SalesRequiredMixin
 from core.selectors import paginate
 from core.services import log_audit
+from crm.selectors import preference_rows
 
 from . import ai, selectors, services
-from .forms import AgentReplyForm, AISettingsForm, HandoffForm, InboxFilterForm
-from .models import AISettings, Conversation, ConversationStatus
+from .forms import (
+    AgentReplyForm,
+    AISettingsForm,
+    ConversationAssignForm,
+    HandoffForm,
+    InboxFilterForm,
+    StaffBookForm,
+)
+from .models import AISettings, Conversation, ConversationStatus, Recommendation
 
 
 class InboxView(SalesRequiredMixin, TemplateView):
@@ -32,6 +40,8 @@ class InboxView(SalesRequiredMixin, TemplateView):
         ctx["filter_form"] = form
         ctx["page_obj"] = paginate(queryset, self.request.GET.get("page"))
         ctx["waiting"] = selectors.waiting_count()
+        if self.request.user.is_manager:
+            ctx["assignees"] = ConversationAssignForm().fields["assigned_to"].queryset
         ctx["total"] = queryset.count()
         return ctx
 
@@ -87,9 +97,25 @@ class ConversationDetailView(SalesRequiredMixin, DetailView):
         ctx["handoffs"] = conversation.handoffs.select_related("taken_by")
         ctx["reply_form"] = AgentReplyForm()
         ctx["handoff_form"] = HandoffForm()
-        ctx["requirements"] = conversation.requirements or {}
+        requirements = conversation.requirements or {}
+        ctx["requirements"] = {
+            key: value for key, value in requirements.items() if key != "preferences"
+        }
+        ctx["preference_rows"] = preference_rows(requirements.get("preferences"))
         ctx["contact"] = conversation.context or {}
         ctx["can_reply"] = conversation.status != ConversationStatus.CLOSED
+        if self.request.user.is_manager:
+            ctx["assign_form"] = ConversationAssignForm(
+                initial={"assigned_to": conversation.assigned_to_id}
+            )
+        ctx["book_initial"] = {
+            "travel_start": requirements.get("travel_start", ""),
+            "travel_end": requirements.get("travel_end", ""),
+            "travelers": requirements.get("travelers") or 1,
+        }
+        from bookings.selectors import visible_bookings
+
+        ctx["bookings"] = visible_bookings(self.request.user).filter(conversation=conversation)
         return ctx
 
 
@@ -119,6 +145,71 @@ class ConversationTakeOverView(SalesRequiredMixin, View):
         )
         django_messages.success(request, "You are now handling this chat.")
         return redirect("conversations:detail", pk=pk)
+
+
+class ConversationAssignView(ManagerRequiredMixin, View):
+    """Managers hand a chat to an agent, or back to the unassigned pool."""
+
+    def post(self, request, pk):
+        conversation = get_object_or_404(selectors.visible_conversations(request.user), pk=pk)
+        form = ConversationAssignForm(request.POST)
+        if not form.is_valid():
+            django_messages.error(request, "Pick an active team member.")
+        else:
+            user = form.cleaned_data["assigned_to"]
+            services.assign_conversation(
+                conversation=conversation, user=user, actor=request.user, request=request
+            )
+            django_messages.success(
+                request,
+                f"Chat assigned to {user.get_username()}." if user else "Chat unassigned.",
+            )
+        next_url = request.POST.get("next", "")
+        if next_url == "inbox":
+            return redirect("conversations:inbox")
+        return redirect("conversations:detail", pk=pk)
+
+
+class ConversationBookView(SalesRequiredMixin, View):
+    """"Book this for the customer": the same service the widget uses."""
+
+    def post(self, request, pk):
+        from bookings.services import BookingError, booking_from_recommendation
+
+        conversation = get_object_or_404(selectors.visible_conversations(request.user), pk=pk)
+        form = StaffBookForm(request.POST)
+        if not form.is_valid():
+            django_messages.error(request, "Enter the travel date and number of travellers.")
+            return redirect("conversations:detail", pk=pk)
+        data = form.cleaned_data
+        recommendation = get_object_or_404(
+            Recommendation, pk=data["recommendation_id"], conversation=conversation
+        )
+        if conversation.customer is None:
+            django_messages.error(
+                request, "Capture the customer's email or phone in the chat before booking."
+            )
+            return redirect("conversations:detail", pk=pk)
+        try:
+            booking, created = booking_from_recommendation(
+                recommendation=recommendation,
+                customer=conversation.customer,
+                travel_start=data["travel_start"],
+                travel_end=data.get("travel_end"),
+                travelers=data["travelers"],
+                actor=request.user,
+                request=request,
+            )
+        except BookingError as exc:
+            django_messages.error(request, str(exc))
+            return redirect("conversations:detail", pk=pk)
+        django_messages.success(
+            request,
+            f"Booking {booking.booking_number} created — send the customer the payment link."
+            if created
+            else f"Booking {booking.booking_number} already exists for this option.",
+        )
+        return redirect("bookings:detail", pk=booking.pk)
 
 
 class ConversationResumeAIView(SalesRequiredMixin, View):
@@ -198,6 +289,8 @@ class AISettingsView(AdminRequiredMixin, FormView):
                 "enabled": stored.enabled,
                 "provider": stored.provider,
                 "model": stored.model,
+                "handoff_wait_minutes": stored.handoff_wait_minutes,
+                "agent_idle_minutes": stored.agent_idle_minutes,
                 "keys_changed": changed_keys,
             },
             request=self.request,

@@ -190,6 +190,43 @@ def serialize_item(obj, inventory_type):
     return common
 
 
+# What a customer's car-type wish matches in `vehicle_type` or the car's name.
+CAR_TYPE_TERMS = {
+    "sedan": ("sedan",),
+    "suv": ("suv", "muv"),
+    "hatchback": ("hatchback",),
+    "tempo traveller": ("tempo", "traveller", "van", "minibus"),
+}
+
+
+def _squash(text):
+    """`Wi-Fi` and `wifi` compare equal."""
+    return "".join(ch for ch in str(text).lower() if ch.isalnum())
+
+
+def amenity_matches(item_amenities, wanted):
+    have = [_squash(amenity) for amenity in item_amenities or []]
+    return sum(1 for want in wanted if any(_squash(want) in amenity for amenity in have))
+
+
+def _apply_preferences(queryset, kind, *, min_star_rating, car_type, transmission, min_seats):
+    """Hard filters the data can actually answer. Amenities only re-rank (see below)."""
+    if kind == InventoryType.HOTEL and min_star_rating:
+        queryset = queryset.filter(star_rating__gte=min_star_rating)
+    if kind == InventoryType.CAR:
+        if min_seats:
+            queryset = queryset.filter(seats__gte=min_seats)
+        terms = CAR_TYPE_TERMS.get(car_type, (car_type,) if car_type else ())
+        if terms:
+            condition = Q()
+            for term in terms:
+                condition |= Q(vehicle_type__icontains=term) | Q(name__icontains=term)
+            queryset = queryset.filter(condition)
+        if transmission:
+            queryset = queryset.filter(transmission__icontains=transmission)
+    return queryset
+
+
 def search_inventory(
     *,
     q="",
@@ -200,10 +237,17 @@ def search_inventory(
     website=None,
     limit=30,
     active_only=True,
+    min_star_rating=None,
+    amenities=(),
+    car_type="",
+    transmission="",
+    min_seats=None,
 ):
     """Unified search across hotels, cars and packages.
 
-    Returns normalised dicts sorted by website priority, then by price.
+    Returns normalised dicts sorted by website priority, then by how many of the
+    wanted amenities they have, then by price. Star rating, seats, car type and
+    transmission are hard filters: a 4-seater is never offered to seven people.
     Used by the inventory search page, the public API and the AI engine.
     """
     wanted = [inventory_type] if inventory_type else list(MODEL_BY_TYPE)
@@ -229,6 +273,14 @@ def search_inventory(
                 | Q(destination__code__icontains=destination)
                 | Q(name__icontains=destination)
             )
+        queryset = _apply_preferences(
+            queryset,
+            kind,
+            min_star_rating=min_star_rating,
+            car_type=car_type,
+            transmission=transmission,
+            min_seats=min_seats,
+        )
         hidden = hidden_ids_for_website(website, kind)
         priorities = priority_map_for_website(website, kind)
         for obj in queryset[: limit * 2]:
@@ -236,10 +288,17 @@ def search_inventory(
                 continue
             item = serialize_item(obj, kind)
             item["priority"] = priorities.get(obj.pk, 0)
+            item["amenity_matches"] = amenity_matches(item["amenities"], amenities)
             results.append(item)
 
-    results.sort(key=lambda item: (-item["priority"], item["price"] or 0))
+    results.sort(
+        key=lambda item: (-item["priority"], -item["amenity_matches"], item["price"] or 0)
+    )
     return results[:limit]
+
+
+def is_hidden_on(website, inventory_type, object_id):
+    return object_id in hidden_ids_for_website(website, inventory_type)
 
 
 def get_inventory_object(inventory_type, object_id):

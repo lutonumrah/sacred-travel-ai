@@ -228,6 +228,7 @@ class LeadDetailView(SalesRequiredMixin, DetailView):
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
         lead = self.object
+        ctx["preference_rows"] = selectors.preference_rows(lead.preferences)
         ctx["notes"] = lead.notes.select_related("author")
         ctx["activities"] = lead.activities.select_related("actor")[:50]
         ctx["follow_ups"] = lead.follow_ups.select_related("assigned_to")

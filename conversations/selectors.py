@@ -1,6 +1,6 @@
 from django.db.models import Count, Max, Q
 
-from .models import Conversation, ConversationStatus
+from .models import Conversation, ConversationStatus, MessageSender
 
 
 def visible_conversations(user):
@@ -52,3 +52,123 @@ def conversation_messages(conversation, *, include_internal=True):
     if not include_internal:
         queryset = queryset.filter(is_internal=False)
     return queryset
+
+
+# --------------------------------------------------------------------------
+# What the public widget may see
+# --------------------------------------------------------------------------
+
+
+def widget_known_details(conversation):
+    """Prefill for the widget's booking form.
+
+    Only what this chat itself was told — never the linked Customer record, which
+    may be someone else's if a visitor typed their email address.
+    """
+    context = conversation.context or {}
+    requirements = conversation.requirements or {}
+    return {
+        "name": context.get("name", ""),
+        "email": context.get("email", ""),
+        "phone": context.get("phone", ""),
+        "travel_start": requirements.get("travel_start", ""),
+        "travel_end": requirements.get("travel_end", ""),
+        "travelers": requirements.get("travelers") or None,
+    }
+
+
+def widget_card(recommendation):
+    payload = recommendation.payload or {}
+    return {
+        "recommendation_id": recommendation.pk,
+        "type": recommendation.inventory_type,
+        "id": recommendation.object_id,
+        "title": recommendation.title,
+        "price": recommendation.price,
+        "currency": recommendation.currency,
+        "price_label": payload.get("price_label", ""),
+        "detail": payload.get("detail", ""),
+        "bookable": bool(recommendation.price),
+    }
+
+
+def widget_messages(conversation, *, since=None, message_ids=None, request=None):
+    """Customer-visible messages with the cards each AI turn showed.
+
+    Internal notes and metadata (engine, staff usernames) stay out.
+    """
+    messages = conversation.messages.filter(is_internal=False).select_related("sender_user")
+    if since:
+        messages = messages.filter(pk__gt=since)
+    if message_ids is not None:
+        messages = messages.filter(pk__in=message_ids)
+    messages = list(messages)
+    wanted = {
+        rec_id
+        for message in messages
+        for rec_id in (message.metadata or {}).get("recommendation_ids", [])
+    }
+    cards = {
+        rec.pk: widget_card(rec)
+        for rec in conversation.recommendations.filter(pk__in=wanted)
+    }
+    # Booking notes ("booking created / confirmed") carry the booking's pay link.
+    booking_ids = {
+        (message.metadata or {}).get("booking_id")
+        for message in messages
+        if (message.metadata or {}).get("event", "").startswith("booking_")
+    } - {None}
+    bookings = {}
+    if booking_ids:
+        rows = widget_bookings(
+            conversation, request, bookings=conversation.bookings.filter(pk__in=booking_ids)
+        )
+        bookings = {row["id"]: row for row in rows}
+    rows = []
+    for message in messages:
+        sender_name = ""
+        if message.sender_type == MessageSender.AGENT:
+            user = message.sender_user
+            sender_name = (user.first_name if user else "") or "Travel consultant"
+        metadata = message.metadata or {}
+        rows.append(
+            {
+                "id": message.pk,
+                "sender_type": message.sender_type,
+                "sender_name": sender_name,
+                "content": message.content,
+                "created_at": message.created_at,
+                "event": metadata.get("event", ""),
+                "booking": bookings.get(metadata.get("booking_id")),
+                "cards": [
+                    cards[rec_id]
+                    for rec_id in (message.metadata or {}).get("recommendation_ids", [])
+                    if rec_id in cards
+                ][:4],
+            }
+        )
+    return rows
+
+
+def widget_bookings(conversation, request=None, *, bookings=None):
+    """This chat's bookings, with the pay link while it is still payable."""
+    from bookings import services as booking_services
+
+    if bookings is None:
+        bookings = conversation.bookings.all()
+    rows = []
+    for booking in bookings.order_by("created_at"):
+        payable = booking.is_payable and booking_services.has_live_payment_link(booking)
+        rows.append(
+            {
+                "id": booking.pk,
+                "number": booking.booking_number,
+                "status": booking.status,
+                "status_display": booking.get_status_display(),
+                "product": booking.product_name,
+                "total": booking.total_amount,
+                "currency": booking.currency,
+                "payment_url": booking_services.payment_url(booking, request) if payable else "",
+            }
+        )
+    return rows

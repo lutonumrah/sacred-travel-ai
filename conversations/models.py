@@ -61,6 +61,8 @@ class Conversation(TimeStampedModel):
     context = models.JSONField(default=dict, blank=True)
     requirements = models.JSONField(default=dict, blank=True)
     last_message_at = models.DateTimeField(null=True, blank=True)
+    # When the chat last moved to WAITING; drives the AI auto-resume timer.
+    handoff_requested_at = models.DateTimeField(null=True, blank=True)
     closed_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
@@ -187,6 +189,15 @@ class AISettings(TimeStampedModel):
     model = models.CharField(max_length=100, default=DEFAULT_MODEL[AIProvider.ANTHROPIC])
     anthropic_api_key = models.CharField(max_length=255, blank=True)
     gemini_api_key = models.CharField(max_length=255, blank=True)
+    # Auto-resume timers. 0 switches a timer off.
+    handoff_wait_minutes = models.PositiveIntegerField(
+        default=15,
+        help_text="If nobody picks up a handoff within this many minutes, the AI resumes.",
+    )
+    agent_idle_minutes = models.PositiveIntegerField(
+        default=0,
+        help_text="If the agent leaves a customer message unanswered this long, the AI resumes.",
+    )
     updated_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
