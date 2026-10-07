@@ -1485,6 +1485,108 @@ from .models import KnowledgeArticle, KnowledgeCategory  # noqa: E402
 from .selectors import knowledge_for_website  # noqa: E402
 
 
+class LiveInboxTests(TestCase):
+    def setUp(self):
+        self.website = Website.objects.create(
+            name="Main", domain="main.com", source_identifier="main"
+        )
+        self.other_site = Website.objects.create(
+            name="Other", domain="other.com", source_identifier="other"
+        )
+        self.agent = User.objects.create_user("agent", password="pw", role="employee")
+        self.other = User.objects.create_user("other", password="pw", role="employee")
+        self.manager = User.objects.create_user("mgr", password="pw", role="manager")
+        self.mine, _ = services.start_conversation(website=self.website)
+        self.theirs, _ = services.start_conversation(website=self.website)
+        services.take_over(conversation=self.theirs, user=self.other)
+        self.elsewhere, _ = services.start_conversation(website=self.other_site)
+        self.url = reverse("conversations:inbox_live")
+
+    def test_the_fragment_is_scoped_to_what_the_user_may_see(self):
+        self.client.force_login(self.agent)
+        data = self.client.get(self.url).json()
+        self.assertIn(self.mine.session_key[:10], data["html"])
+        self.assertNotIn(self.theirs.session_key[:10], data["html"])
+        self.client.force_login(self.manager)
+        self.assertIn(self.theirs.session_key[:10], self.client.get(self.url).json()["html"])
+
+    def test_the_fragment_respects_the_inbox_filters(self):
+        self.client.force_login(self.manager)
+        data = self.client.get(self.url, {"website": self.other_site.pk}).json()
+        self.assertIn(self.elsewhere.session_key[:10], data["html"])
+        self.assertNotIn(self.mine.session_key[:10], data["html"])
+        self.assertEqual(data["total"], 1)
+
+    def test_the_waiting_count_comes_with_it(self):
+        Conversation.objects.filter(pk=self.mine.pk).update(status=ConversationStatus.WAITING)
+        # Waiting, but on another employee's chat: not this agent's to count.
+        Conversation.objects.filter(pk=self.theirs.pk).update(status=ConversationStatus.WAITING)
+        self.client.force_login(self.agent)
+        data = self.client.get(self.url).json()
+        self.assertEqual(data["waiting"], 1)
+        self.assertIn("1 chat waiting", data["html"])
+        page = self.client.get(reverse("conversations:inbox"))
+        self.assertEqual(page.context["waiting_chats"], 1)
+        self.assertContains(page, 'id="nav-waiting"')
+
+    def test_staff_only(self):
+        self.assertEqual(self.client.get(self.url).status_code, 302)
+        stock = User.objects.create_user("stock", password="pw", role="inventory")
+        self.client.force_login(stock)
+        self.assertEqual(self.client.get(self.url).status_code, 302)
+
+    def test_the_inbox_page_wires_up_polling(self):
+        self.client.force_login(self.agent)
+        page = self.client.get(reverse("conversations:inbox"), {"status": "ai_active"})
+        self.assertContains(page, 'data-live-url="/conversations/inbox/live/?status=ai_active"')
+        self.assertContains(page, "js/live.js")
+
+
+class ConversationLiveTests(TestCase):
+    def setUp(self):
+        self.website = Website.objects.create(
+            name="Main", domain="main.com", source_identifier="main"
+        )
+        self.agent = User.objects.create_user("agent", password="pw", role="employee")
+        self.other = User.objects.create_user("other", password="pw", role="employee")
+        self.conversation, _ = services.start_conversation(website=self.website)
+        self.first = services.post_message(
+            conversation=self.conversation, sender_type=MessageSender.CUSTOMER, content="Hi"
+        )
+        self.client.force_login(self.agent)
+        self.url = reverse("conversations:live", args=[self.conversation.pk])
+
+    def test_only_messages_after_since_are_returned(self):
+        newer = services.post_message(
+            conversation=self.conversation,
+            sender_type=MessageSender.CUSTOMER,
+            content="<b>Need a hotel</b>",
+        )
+        data = self.client.get(self.url, {"since": self.first.pk}).json()
+        self.assertEqual(data["last_id"], newer.pk)
+        self.assertNotIn(f'data-id="{self.first.pk}"', data["html"])
+        # Rendered by the template, so customer text arrives escaped.
+        self.assertIn("&lt;b&gt;Need a hotel&lt;/b&gt;", data["html"])
+        self.assertEqual(self.client.get(self.url, {"since": newer.pk}).json()["html"].strip(), "")
+
+    def test_status_changes_come_with_fresh_action_buttons(self):
+        services.take_over(conversation=self.conversation, user=self.agent)
+        data = self.client.get(self.url, {"since": self.first.pk}).json()
+        self.assertEqual(data["status"], ConversationStatus.HUMAN_ACTIVE)
+        self.assertEqual(data["status_display"], "Human Active")
+        self.assertIn("Hand back to AI", data["actions_html"])
+        self.assertIn("csrfmiddlewaretoken", data["actions_html"])
+        self.assertTrue(data["can_reply"])
+
+    def test_another_employees_chat_is_404(self):
+        services.take_over(conversation=self.conversation, user=self.other)
+        self.assertEqual(self.client.get(self.url).status_code, 404)
+
+    def test_the_detail_page_starts_from_the_last_message(self):
+        page = self.client.get(reverse("conversations:detail", args=[self.conversation.pk]))
+        self.assertContains(page, f'data-last-id="{self.first.pk}"')
+
+
 class KnowledgeFixture(TestCase):
     def setUp(self):
         self.website = Website.objects.create(

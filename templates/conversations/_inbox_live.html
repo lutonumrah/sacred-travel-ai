@@ -1,0 +1,5 @@
+{% comment %}The part of the inbox the page re-fetches every few seconds (InboxLiveView).{% endcomment %}
+{% if waiting %}
+  <ul class="messages"><li class="warning">{{ waiting }} chat{{ waiting|pluralize }} waiting for a human agent.</li></ul>
+{% endif %}
+{% include "conversations/_conversation_table.html" with page_obj=page_obj total=total %}

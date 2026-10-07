@@ -148,7 +148,10 @@ AI**. Every switch is recorded as a `ConversationHandoff`. The widget polls for
 agent replies, so the customer sees them without a page reload. While a chat is
 waiting for a person the AI stays quiet and tells the customer a consultant is
 coming. Managers assign or reassign chats from the inbox or the conversation
-page; the agent is notified.
+page; the agent is notified. The inbox refreshes itself every 10 seconds
+(same filters and page), the conversation page streams in new messages and
+status changes every few seconds, and the sidebar's waiting count stays
+current — plain polling that pauses while the tab is hidden.
 
 Under **AI Settings**, *handoff wait* and *agent idle* timers (minutes, 0 = never)
 let the AI take a chat back when nobody picks up a handoff, or when the agent

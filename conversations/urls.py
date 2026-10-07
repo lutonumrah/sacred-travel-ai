@@ -6,6 +6,7 @@ app_name = "conversations"
 
 urlpatterns = [
     path("inbox/", views.InboxView.as_view(), name="inbox"),
+    path("inbox/live/", views.InboxLiveView.as_view(), name="inbox_live"),
     path("history/", views.ConversationHistoryView.as_view(), name="history"),
     path("widget/", views.WidgetPreviewView.as_view(), name="widget_preview"),
     path("ai-settings/", views.AISettingsView.as_view(), name="ai_settings"),
@@ -17,6 +18,7 @@ urlpatterns = [
         "knowledge/<int:pk>/delete/", views.KnowledgeDeleteView.as_view(), name="knowledge_delete"
     ),
     path("<int:pk>/", views.ConversationDetailView.as_view(), name="detail"),
+    path("<int:pk>/live/", views.ConversationLiveView.as_view(), name="live"),
     path("<int:pk>/reply/", views.ConversationReplyView.as_view(), name="reply"),
     path("<int:pk>/take-over/", views.ConversationTakeOverView.as_view(), name="take_over"),
     path("<int:pk>/resume-ai/", views.ConversationResumeAIView.as_view(), name="resume_ai"),

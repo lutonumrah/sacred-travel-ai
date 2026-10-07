@@ -38,7 +38,7 @@
         </details>
         <a href="{% url 'conversations:inbox' %}" class="{% if active_nav == 'conversations' %}active{% endif %}">
           Conversations
-          {% if waiting_chats %}<span class="nav-count">{{ waiting_chats }}</span>{% endif %}
+          <span class="nav-count" id="nav-waiting" title="Chats waiting for a human" {% if not waiting_chats %}hidden{% endif %}>{{ waiting_chats }}</span>
         </a>
         <a href="{% url 'bookings:list' %}" class="{% if active_nav == 'bookings' %}active{% endif %}">Bookings</a>
         {% endif %}

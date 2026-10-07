@@ -1,0 +1,16 @@
+<a class="btn ghost" href="{% url 'conversations:inbox' %}">Inbox</a>
+{% if conversation.status == 'human_active' %}
+  <form method="post" action="{% url 'conversations:resume_ai' conversation.pk %}" class="inline-form">
+    {% csrf_token %}<button class="btn secondary" type="submit">Hand back to AI</button>
+  </form>
+{% elif conversation.status != 'closed' %}
+  <form method="post" action="{% url 'conversations:take_over' conversation.pk %}" class="inline-form">
+    {% csrf_token %}<button class="btn" type="submit">Take over</button>
+  </form>
+{% endif %}
+{% if conversation.status != 'closed' %}
+  <form method="post" action="{% url 'conversations:close' conversation.pk %}" class="inline-form"
+        onsubmit="return confirm('Close this conversation?')">
+    {% csrf_token %}<button class="btn ghost" type="submit">Close</button>
+  </form>
+{% endif %}

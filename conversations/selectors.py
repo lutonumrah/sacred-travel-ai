@@ -49,8 +49,10 @@ def live_conversations(*, user=None):
     return list_conversations(user=user).exclude(status=ConversationStatus.CLOSED)
 
 
-def waiting_count():
-    return Conversation.objects.filter(status=ConversationStatus.WAITING).count()
+def waiting_count(user=None):
+    """Chats waiting for a person; with `user`, only ones that user can open."""
+    base = visible_conversations(user) if user is not None else Conversation.objects.all()
+    return base.filter(status=ConversationStatus.WAITING).count()
 
 
 def conversation_messages(conversation, *, include_internal=True):

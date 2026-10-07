@@ -1,22 +1,8 @@
 {% extends "layouts/base.html" %}
+{% load static %}
 
 {% block page_actions %}
-  <a class="btn ghost" href="{% url 'conversations:inbox' %}">Inbox</a>
-  {% if conversation.status == 'human_active' %}
-    <form method="post" action="{% url 'conversations:resume_ai' conversation.pk %}" class="inline-form">
-      {% csrf_token %}<button class="btn secondary" type="submit">Hand back to AI</button>
-    </form>
-  {% elif conversation.status != 'closed' %}
-    <form method="post" action="{% url 'conversations:take_over' conversation.pk %}" class="inline-form">
-      {% csrf_token %}<button class="btn" type="submit">Take over</button>
-    </form>
-  {% endif %}
-  {% if conversation.status != 'closed' %}
-    <form method="post" action="{% url 'conversations:close' conversation.pk %}" class="inline-form"
-          onsubmit="return confirm('Close this conversation?')">
-      {% csrf_token %}<button class="btn ghost" type="submit">Close</button>
-    </form>
-  {% endif %}
+  <div id="conversation-actions" class="contents">{% include "conversations/_detail_actions.html" %}</div>
 {% endblock %}
 
 {% block content %}
@@ -24,28 +10,19 @@
     <div class="panel">
       <div class="panel-head">
         <h2>Transcript</h2>
-        <span class="badge status-{{ conversation.status }}">{{ conversation.get_status_display }}</span>
+        <span class="badge status-{{ conversation.status }}" id="conversation-status">{{ conversation.get_status_display }}</span>
       </div>
-      <div class="chat-window" id="chat-window">
+      <div class="chat-window" id="chat-window" data-live-url="{% url 'conversations:live' conversation.pk %}"
+           data-last-id="{{ last_message_id }}" data-status="{{ conversation.status }}" aria-live="polite">
         {% for message in messages_list %}
-          <div class="bubble {{ message.sender_type }}">
-            <span class="who">
-              {% if message.sender_type == 'agent' %}{{ message.sender_user.get_username|default:"Agent" }}
-              {% elif message.sender_type == 'ai' %}AI assistant
-              {% elif message.sender_type == 'customer' %}Customer
-              {% else %}System{% endif %}
-              {% if message.metadata.engine %} · {{ message.metadata.engine }}{% endif %}
-            </span>
-            {{ message.content }}
-            <span class="when">{{ message.created_at|date:"d M H:i" }}</span>
-          </div>
+          {% include "conversations/_message.html" %}
         {% empty %}
-          <p class="muted small">No messages yet.</p>
+          <p class="muted small" id="chat-empty">No messages yet.</p>
         {% endfor %}
       </div>
 
       {% if can_reply %}
-        <form method="post" action="{% url 'conversations:reply' conversation.pk %}" class="reply-box">
+        <form method="post" action="{% url 'conversations:reply' conversation.pk %}" class="reply-box" id="reply-box">
           {% csrf_token %}
           {{ reply_form.content }}
           <div class="form-actions">
@@ -53,9 +30,8 @@
             <span class="muted small">Sending a reply takes this chat over from the AI.</span>
           </div>
         </form>
-      {% else %}
-        <p class="muted small" style="margin-top:1rem">This conversation is closed.</p>
       {% endif %}
+      <p class="muted small" style="margin-top:1rem" id="chat-closed" {% if can_reply %}hidden{% endif %}>This conversation is closed.</p>
     </div>
 
     <div>
@@ -174,4 +150,5 @@
   const chat = document.getElementById("chat-window");
   if (chat) chat.scrollTop = chat.scrollHeight;
 </script>
+<script src="{% static 'js/live.js' %}" defer></script>
 {% endblock %}

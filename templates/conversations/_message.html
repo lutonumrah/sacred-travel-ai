@@ -1,0 +1,11 @@
+<div class="bubble {{ message.sender_type }}{% if message.is_internal %} internal{% endif %}" data-id="{{ message.pk }}">
+  <span class="who">
+    {% if message.sender_type == 'agent' %}{{ message.sender_user.get_username|default:"Agent" }}
+    {% elif message.sender_type == 'ai' %}AI assistant
+    {% elif message.sender_type == 'customer' %}Customer
+    {% else %}System{% endif %}
+    {% if message.metadata.engine %} · {{ message.metadata.engine }}{% endif %}
+  </span>
+  {{ message.content }}
+  <span class="when">{{ message.created_at|date:"d M H:i" }}</span>
+</div>

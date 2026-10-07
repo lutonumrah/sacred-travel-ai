@@ -14,5 +14,5 @@ def notification_badge(request):
 
     return {
         "unread_notifications": unread_notifications(user).count(),
-        "waiting_chats": waiting_count(),
+        "waiting_chats": waiting_count(user),
     }

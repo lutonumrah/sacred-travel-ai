@@ -1,4 +1,5 @@
 {% extends "layouts/base.html" %}
+{% load static %}
 
 {% block page_actions %}
   <a class="btn ghost" href="{% url 'conversations:history' %}">Full history</a>
@@ -6,9 +7,10 @@
 {% endblock %}
 
 {% block content %}
-  {% if waiting %}
-    <div class="messages"><li class="warning">{{ waiting }} chat{{ waiting|pluralize }} waiting for a human agent.</li></div>
-  {% endif %}
   {% include "partials/_filters.html" %}
-  {% include "conversations/_conversation_table.html" with page_obj=page_obj total=total %}
+  <div id="inbox-live" data-live-url="{% url 'conversations:inbox_live' %}?{{ request.GET.urlencode }}">
+    {% include "conversations/_inbox_live.html" %}
+  </div>
 {% endblock %}
+
+{% block scripts %}<script src="{% static 'js/live.js' %}" defer></script>{% endblock %}

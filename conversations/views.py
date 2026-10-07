@@ -34,30 +34,54 @@ from .models import (
 )
 
 
+def _inbox_context(request):
+    """The open-chats table for the inbox page and its live refresh, same filters."""
+    form = InboxFilterForm(request.GET or None)
+    data = form.cleaned_data if form.is_bound and form.is_valid() else {}
+    queryset = selectors.list_conversations(
+        q=data.get("q", "") or "",
+        status=data.get("status", "") or "",
+        website=data.get("website"),
+        user=request.user,
+    ).exclude(status=ConversationStatus.CLOSED)
+    ctx = {
+        "filter_form": form,
+        "page_obj": paginate(queryset, request.GET.get("page")),
+        "waiting": selectors.waiting_count(request.user),
+        "total": queryset.count(),
+        "querystring": urlencode(
+            [(key, value) for key, value in request.GET.items() if key != "page" and value]
+        ),
+    }
+    if request.user.is_manager:
+        ctx["assignees"] = ConversationAssignForm().fields["assigned_to"].queryset
+    return ctx
+
+
 class InboxView(SalesRequiredMixin, TemplateView):
     template_name = "conversations/inbox.html"
     page_title = "Live Conversation Inbox"
-    page_subtitle = "AI and human chats currently in progress."
+    page_subtitle = "AI and human chats currently in progress. Updates every few seconds."
     active_nav = "conversations"
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
-        form = InboxFilterForm(self.request.GET or None)
-        form.is_valid()
-        data = form.cleaned_data if form.is_bound and form.is_valid() else {}
-        queryset = selectors.list_conversations(
-            q=data.get("q", "") or "",
-            status=data.get("status", "") or "",
-            website=data.get("website"),
-            user=self.request.user,
-        ).exclude(status=ConversationStatus.CLOSED)
-        ctx["filter_form"] = form
-        ctx["page_obj"] = paginate(queryset, self.request.GET.get("page"))
-        ctx["waiting"] = selectors.waiting_count()
-        if self.request.user.is_manager:
-            ctx["assignees"] = ConversationAssignForm().fields["assigned_to"].queryset
-        ctx["total"] = queryset.count()
+        ctx.update(_inbox_context(self.request))
         return ctx
+
+
+class InboxLiveView(SalesRequiredMixin, View):
+    """The inbox table re-rendered for the page's poll: server-escaped HTML in JSON."""
+
+    def get(self, request):
+        ctx = _inbox_context(request)
+        return JsonResponse(
+            {
+                "html": render_to_string("conversations/_inbox_live.html", ctx, request=request),
+                "waiting": ctx["waiting"],
+                "total": ctx["total"],
+            }
+        )
 
 
 class ConversationHistoryView(SalesRequiredMixin, TemplateView):
@@ -106,7 +130,9 @@ class ConversationDetailView(SalesRequiredMixin, DetailView):
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
         conversation = self.object
-        ctx["messages_list"] = selectors.conversation_messages(conversation)
+        messages_list = list(selectors.conversation_messages(conversation))
+        ctx["messages_list"] = messages_list
+        ctx["last_message_id"] = messages_list[-1].pk if messages_list else 0
         ctx["recommendations"] = conversation.recommendations.all()[:20]
         ctx["handoffs"] = conversation.handoffs.select_related("taken_by")
         ctx["reply_form"] = AgentReplyForm()
@@ -132,6 +158,41 @@ class ConversationDetailView(SalesRequiredMixin, DetailView):
 
         ctx["bookings"] = visible_bookings(self.request.user).filter(conversation=conversation)
         return ctx
+
+
+class ConversationLiveView(SalesRequiredMixin, View):
+    """New messages since `?since=<id>` plus the chat's current status, for the detail page."""
+
+    def get(self, request, pk):
+        conversation = get_object_or_404(
+            selectors.visible_conversations(request.user).select_related("assigned_to"), pk=pk
+        )
+        since = request.GET.get("since", "")
+        messages_list = list(
+            selectors.conversation_messages(conversation).filter(
+                pk__gt=int(since) if since.isdigit() else 0
+            )
+        )
+        return JsonResponse(
+            {
+                "status": conversation.status,
+                "status_display": conversation.get_status_display(),
+                "assigned_to": (
+                    conversation.assigned_to.get_username() if conversation.assigned_to else ""
+                ),
+                "can_reply": conversation.status != ConversationStatus.CLOSED,
+                "last_id": messages_list[-1].pk if messages_list else 0,
+                "html": render_to_string(
+                    "conversations/_messages.html", {"messages_list": messages_list}
+                ),
+                "actions_html": render_to_string(
+                    "conversations/_detail_actions.html",
+                    {"conversation": conversation},
+                    request=request,
+                ),
+                "waiting": selectors.waiting_count(request.user),
+            }
+        )
 
 
 class ConversationReplyView(SalesRequiredMixin, View):
