@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth import views as auth_views
 from django.contrib.auth.mixins import LoginRequiredMixin
@@ -26,6 +27,12 @@ from .models import Team, User
 class LoginView(auth_views.LoginView):
     template_name = "accounts/login.html"
     redirect_authenticated_user = True
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        # The seed_demo credentials are a development aid, never a live hint.
+        ctx["show_demo_login"] = settings.DEBUG
+        return ctx
 
 
 class LogoutView(auth_views.LogoutView):

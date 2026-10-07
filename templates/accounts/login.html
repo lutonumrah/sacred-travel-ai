@@ -8,7 +8,9 @@
   {% if form.errors %}
     <div class="form-error">Your username and password did not match. Please try again.</div>
   {% endif %}
-  <p class="muted">Demo login: <strong>admin</strong> / <strong>travel1234</strong></p>
+  {% if show_demo_login %}
+    <p class="muted">Demo login: <strong>admin</strong> / <strong>travel1234</strong></p>
+  {% endif %}
   <form method="post">
     {% csrf_token %}
     <label for="{{ form.username.id_for_label }}">Username</label>
