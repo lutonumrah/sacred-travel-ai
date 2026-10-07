@@ -1,0 +1,117 @@
+{% extends "public/base.html" %}
+
+{% block title %}{% if is_paid %}Booking confirmed{% else %}Pay for your booking{% endif %} · {{ brand }}{% endblock %}
+
+{% block content %}
+  {% if is_paid %}
+    <div class="public-banner ok">
+      <strong>Payment received — your booking is confirmed.</strong>
+      <span>Thank you, {{ guest.name }}. Keep your booking number for reference.</span>
+    </div>
+  {% elif booking.status == 'failed' %}
+    <div class="public-banner warn">
+      <strong>The last payment attempt did not go through.</strong>
+      <span>No money was taken for it. You can try again below.</span>
+    </div>
+  {% endif %}
+
+  <div class="panel">
+    <div class="panel-head">
+      <h1 class="public-title">{{ booking.product_name }}</h1>
+      <span class="badge status-{{ booking.status }}">{{ booking.get_status_display }}</span>
+    </div>
+    <dl class="definition">
+      <dt>Booking</dt><dd class="mono">{{ booking.booking_number }}</dd>
+      <dt>Name</dt><dd>{{ guest.name }}</dd>
+      <dt>Dates</dt>
+      <dd>{{ booking.travel_start|date:"D, d M Y"|default:"—" }}{% if booking.travel_end and booking.travel_end != booking.travel_start %} → {{ booking.travel_end|date:"D, d M Y" }}{% endif %}</dd>
+      <dt>Travellers</dt><dd>{{ booking.travelers_count }}</dd>
+    </dl>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head"><h2>Price</h2></div>
+    <dl class="definition public-price">
+      <dt>Subtotal{% if pricing.description %}<div class="small">{{ pricing.description }}</div>{% endif %}</dt>
+      <dd>{{ booking.currency }} {{ booking.subtotal|floatformat:2 }}</dd>
+      <dt>Taxes</dt><dd>{{ booking.currency }} {{ booking.tax_amount|floatformat:2 }}</dd>
+      <dt class="total">Total</dt><dd class="total">{{ booking.currency }} {{ booking.total_amount|floatformat:2 }}</dd>
+    </dl>
+
+    {% if is_payable %}
+      <div class="public-pay">
+        {% if is_live_gateway %}
+          <button class="btn public-pay-btn" type="button" id="pay-now">Pay {% if booking.currency == 'INR' %}₹{% else %}{{ booking.currency }} {% endif %}{{ booking.total_amount|floatformat:2 }}</button>
+        {% else %}
+          <button class="btn public-pay-btn" type="button" id="simulate-pay">Simulate payment (test mode)</button>
+          <p class="muted small">Test mode: no real money moves. Live Razorpay keys are not configured.</p>
+        {% endif %}
+        <p class="form-error" id="pay-error" hidden></p>
+      </div>
+    {% elif not is_paid %}
+      <p class="muted">This booking is {{ booking.get_status_display|lower }} and cannot be paid online. Please contact {{ brand }}.</p>
+    {% endif %}
+  </div>
+{% endblock %}
+
+{% block scripts %}
+{% if is_payable %}
+{% url 'api_pay:order' token as order_url %}
+{% url 'api_pay:verify' token as verify_url %}
+{% url 'api_pay:simulate' token as simulate_url %}
+{{ checkout_payload|json_script:"checkout-options" }}
+{% if is_live_gateway %}<script src="https://checkout.razorpay.com/v1/checkout.js"></script>{% endif %}
+<script>
+  (function () {
+    var errorBox = document.getElementById("pay-error");
+    function post(url, body) {
+      return fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body || {}),
+      }).then(function (response) {
+        return response.json().then(function (data) {
+          if (!data.success) throw new Error(data.message || "Something went wrong. Please try again.");
+          return data.data;
+        });
+      });
+    }
+    function fail(button, error) {
+      errorBox.textContent = error.message;
+      errorBox.hidden = false;
+      button.disabled = false;
+    }
+
+    var simulate = document.getElementById("simulate-pay");
+    if (simulate) {
+      simulate.addEventListener("click", function () {
+        simulate.disabled = true;
+        post("{{ simulate_url|escapejs }}").then(function () {
+          window.location.reload();
+        }, function (error) { fail(simulate, error); });
+      });
+    }
+
+    var pay = document.getElementById("pay-now");
+    if (pay) {
+      pay.addEventListener("click", function () {
+        pay.disabled = true;
+        post("{{ order_url|escapejs }}").then(function (order) {
+          var options = JSON.parse(document.getElementById("checkout-options").textContent);
+          options.order_id = order.order_id;
+          options.amount = order.amount;
+          options.currency = order.currency;
+          options.handler = function (response) {
+            post("{{ verify_url|escapejs }}", response).then(function () {
+              window.location.reload();
+            }, function (error) { fail(pay, error); });
+          };
+          options.modal = { ondismiss: function () { pay.disabled = false; } };
+          new Razorpay(options).open();
+        }, function (error) { fail(pay, error); });
+      });
+    }
+  })();
+</script>
+{% endif %}
+{% endblock %}

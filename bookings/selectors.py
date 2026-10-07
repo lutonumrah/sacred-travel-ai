@@ -16,6 +16,17 @@ def visible_bookings(user):
     return queryset
 
 
+def booking_for_payment_token(token):
+    """The booking behind a customer payment link, expired or not; None if unknown."""
+    if not token or len(token) > 64:
+        return None
+    return (
+        Booking.objects.select_related("customer", "website", "conversation")
+        .filter(payment_token=token)
+        .first()
+    )
+
+
 def list_bookings(*, q="", status="", website=None, date_from=None, date_to=None, user=None):
     base = visible_bookings(user) if user is not None else Booking.objects.all()
     queryset = base.select_related("customer", "website", "lead", "created_by")

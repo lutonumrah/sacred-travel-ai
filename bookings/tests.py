@@ -678,3 +678,257 @@ class BookingAccessTests(BookingFixture):
         )
         self.assertEqual(self.client.get(reverse("api_bookings:list")).status_code, 403)
 
+
+
+# --------------------------------------------------------------------------
+# Batch 2: pricing chat recommendations and the customer payment link
+# --------------------------------------------------------------------------
+
+from datetime import timedelta  # noqa: E402
+
+from django.core.cache import cache  # noqa: E402
+from django.utils import timezone  # noqa: E402
+
+from conversations import services as chat_services  # noqa: E402
+from conversations.models import Message, MessageSender, Recommendation  # noqa: E402
+from inventory.models import CarRental, Hotel  # noqa: E402
+
+
+class QuoteTests(BookingFixture):
+    def setUp(self):
+        super().setUp()
+        self.start = timezone.localdate() + timedelta(days=7)
+        self.hotel = Hotel.objects.create(name="Palm Stay", base_price=Decimal("3000"))
+        self.car = CarRental.objects.create(
+            name="Swift", vehicle_type="Hatchback", seats=4, daily_price=Decimal("1500")
+        )
+        self.package.duration_days = 4
+        self.package.save()
+
+    def quote(self, kind, item, days=None, travelers=2):
+        end = self.start + timedelta(days=days) if days is not None else None
+        return services.quote_item(
+            inventory_type=kind, item=item, travel_start=self.start, travel_end=end,
+            travelers=travelers,
+        )
+
+    def test_hotel_is_price_times_nights(self):
+        quote = self.quote("hotel", self.hotel, days=3, travelers=4)
+        self.assertEqual(quote["subtotal"], Decimal("9000.00"))
+        self.assertEqual(quote["description"], "3 nights × INR 3,000")
+
+    def test_hotel_needs_at_least_one_night(self):
+        with self.assertRaises(services.BookingError):
+            self.quote("hotel", self.hotel, days=0)
+
+    def test_car_is_daily_price_times_days_including_both_ends(self):
+        self.assertEqual(self.quote("car", self.car, days=2)["subtotal"], Decimal("4500.00"))
+        self.assertEqual(self.quote("car", self.car)["subtotal"], Decimal("1500.00"))
+
+    def test_a_car_must_seat_everyone(self):
+        with self.assertRaises(services.BookingError):
+            self.quote("car", self.car, days=1, travelers=5)
+
+    def test_package_is_per_person_and_sets_its_own_end_date(self):
+        quote = self.quote("package", self.package, days=30, travelers=3)
+        self.assertEqual(quote["subtotal"], Decimal("72000.00"))
+        self.assertEqual(quote["travel_end"], self.start + timedelta(days=3))
+
+    def test_price_on_request_and_past_dates_are_refused(self):
+        self.hotel.base_price = 0
+        with self.assertRaises(services.BookingError):
+            self.quote("hotel", self.hotel, days=2)
+        with self.assertRaises(services.BookingError):
+            services.quote_item(
+                inventory_type="package", item=self.package,
+                travel_start=timezone.localdate() - timedelta(days=1),
+            )
+
+    def test_a_booking_never_moves_a_converted_lead_backwards(self):
+        Lead.objects.filter(pk=self.lead.pk).update(status=LeadStatus.CONVERTED)
+        self.lead.refresh_from_db()
+        self.make_booking()
+        self.lead.refresh_from_db()
+        self.assertEqual(self.lead.status, LeadStatus.CONVERTED)
+
+
+class PaymentLinkFixture(BookingFixture):
+    def setUp(self):
+        super().setUp()
+        cache.clear()
+        self.conversation, _ = chat_services.start_conversation(website=self.website)
+        self.conversation.lead = self.lead
+        self.conversation.customer = self.customer
+        self.conversation.save()
+        self.recommendation = Recommendation.objects.create(
+            conversation=self.conversation,
+            inventory_type="package",
+            object_id=self.package.pk,
+            title=self.package.name,
+            price=self.package.base_price,
+        )
+        self.booking, _ = services.booking_from_recommendation(
+            recommendation=self.recommendation,
+            customer=self.customer,
+            travel_start=timezone.localdate() + timedelta(days=20),
+            travelers=1,
+        )
+        self.token = self.booking.payment_token
+
+    def api(self, name, token=None, data=None):
+        return self.client.post(
+            reverse(f"api_pay:{name}", args=[token or self.token]),
+            data or {},
+            content_type="application/json",
+        )
+
+
+class PaymentPageTests(PaymentLinkFixture):
+    def test_a_valid_link_shows_the_booking_summary_without_login(self):
+        response = self.client.get(reverse("public:pay", args=[self.token]))
+        self.assertEqual(response.status_code, 200)
+        page = response.content.decode()
+        for text in (
+            self.booking.booking_number, "Goa Escape", "Ana", "24,000.00", "1,200.00",
+            "25,200.00", "Simulate payment (test mode)", "Pending Payment",
+        ):
+            self.assertIn(text.replace(",", ""), page.replace(",", ""), text)
+        self.assertEqual(response["Cache-Control"], "no-store")
+        self.assertEqual(response["Referrer-Policy"], "no-referrer")
+
+    def test_the_link_expires_after_the_configured_days(self):
+        self.assertAlmostEqual(
+            self.booking.payment_token_expires_at,
+            timezone.now() + timedelta(days=7),
+            delta=timedelta(minutes=1),
+        )
+        with self.settings(PAYMENT_LINK_TTL_DAYS=2):
+            services.issue_payment_link(booking=self.booking)
+        self.assertLess(self.booking.payment_token_expires_at, timezone.now() + timedelta(days=3))
+
+    def test_expired_and_unknown_tokens_are_404(self):
+        Booking.objects.filter(pk=self.booking.pk).update(
+            payment_token_expires_at=timezone.now() - timedelta(minutes=1)
+        )
+        response = self.client.get(reverse("public:pay", args=[self.token]))
+        self.assertEqual(response.status_code, 404)
+        self.assertContains(response, "expired", status_code=404)
+        self.assertNotContains(response, "24,000", status_code=404)
+        self.assertEqual(self.client.get(reverse("public:pay", args=["nope"])).status_code, 404)
+        self.assertEqual(self.api("order").status_code, 404)
+        self.assertEqual(self.api("order", token="nope").status_code, 404)
+
+    def test_issuing_a_new_link_kills_the_old_one(self):
+        old = self.token
+        self.client.force_login(self.agent)
+        Booking.objects.filter(pk=self.booking.pk).update(created_by=self.agent)
+        detail = self.client.get(reverse("bookings:detail", args=[self.booking.pk]))
+        self.assertContains(detail, "Copy customer payment link")
+        self.assertContains(detail, f"/pay/{old}/")
+        self.client.post(reverse("bookings:payment_link", args=[self.booking.pk]))
+        self.booking.refresh_from_db()
+        self.assertNotEqual(self.booking.payment_token, old)
+        self.client.logout()
+        self.assertEqual(self.client.get(reverse("public:pay", args=[old])).status_code, 404)
+        self.assertEqual(
+            self.client.get(reverse("public:pay", args=[self.booking.payment_token])).status_code,
+            200,
+        )
+
+    def test_the_token_never_reaches_the_audit_log(self):
+        from accounts.models import AuditLog
+
+        for entry in AuditLog.objects.all():
+            self.assertNotIn(self.token, json.dumps(entry.metadata))
+
+
+class PublicPaymentAPITests(PaymentLinkFixture):
+    def test_order_then_verify_confirms_the_booking(self):
+        order = self.api("order").json()["data"]
+        self.assertTrue(order["simulated"])
+        self.assertEqual(order["amount"], 2520000)
+        payment_id, signature = payments.simulate_payment(order["order_id"])
+        response = self.api("verify", data={
+            "razorpay_order_id": order["order_id"],
+            "razorpay_payment_id": payment_id,
+            "razorpay_signature": signature,
+        })
+        self.assertEqual(response.status_code, 200, response.content)
+        self.booking.refresh_from_db()
+        self.assertEqual(self.booking.status, BookingStatus.CONFIRMED)
+
+    def test_a_bad_signature_changes_nothing(self):
+        order = self.api("order").json()["data"]
+        response = self.api("verify", data={
+            "razorpay_order_id": order["order_id"],
+            "razorpay_payment_id": "pay_fake",
+            "razorpay_signature": "0" * 64,
+        })
+        self.assertEqual(response.status_code, 400)
+        self.booking.refresh_from_db()
+        self.assertEqual(self.booking.status, BookingStatus.PENDING)
+        self.assertEqual(self.booking.payments.get().status, PaymentStatus.CREATED)
+
+    def test_a_token_cannot_verify_another_bookings_order(self):
+        other = self.make_booking()
+        other_payment = services.create_payment_order(booking=other)
+        payment_id, signature = payments.simulate_payment(other_payment.razorpay_order_id)
+        response = self.api("verify", data={
+            "razorpay_order_id": other_payment.razorpay_order_id,
+            "razorpay_payment_id": payment_id,
+            "razorpay_signature": signature,
+        })
+        self.assertEqual(response.status_code, 404)
+        other.refresh_from_db()
+        self.assertEqual(other.status, BookingStatus.PENDING)
+
+    def test_simulated_payment_confirms_and_tells_the_chat(self):
+        response = self.api("simulate")
+        self.assertEqual(response.status_code, 200, response.content)
+        self.booking.refresh_from_db()
+        self.assertEqual(self.booking.status, BookingStatus.CONFIRMED)
+        self.lead.refresh_from_db()
+        self.assertEqual(self.lead.status, LeadStatus.CONVERTED)
+        note = Message.objects.filter(
+            conversation=self.conversation, sender_type=MessageSender.SYSTEM
+        ).last()
+        self.assertEqual(note.metadata["event"], "booking_confirmed")
+        page = self.client.get(reverse("public:pay", args=[self.token])).content.decode()
+        self.assertIn("your booking is confirmed", page)
+        self.assertNotIn("Simulate payment", page)
+        # Paying twice is refused, not double-charged.
+        self.assertEqual(self.api("simulate").status_code, 409)
+
+    def test_simulation_is_off_with_live_keys(self):
+        with mock.patch.object(payments, "is_live", return_value=True):
+            self.assertEqual(self.api("simulate").status_code, 403)
+        self.booking.refresh_from_db()
+        self.assertEqual(self.booking.status, BookingStatus.PENDING)
+
+    def test_a_cancelled_booking_cannot_be_paid_by_link(self):
+        services.cancel_booking(booking=self.booking, actor=self.manager)
+        self.assertEqual(self.api("order").status_code, 409)
+
+    @override_settings(PUBLIC_API_THROTTLE_RATES={"public_pay": "2/minute"})
+    def test_pay_endpoints_are_throttled(self):
+        codes = [self.api("order").status_code for _ in range(3)]
+        self.assertEqual(codes, [200, 200, 429])
+
+
+class BookingFormScopeTests(BookingFixture):
+    def test_the_customer_and_lead_dropdowns_only_list_visible_records(self):
+        from .forms import BookingForm
+
+        hidden_customer = Customer.objects.create(first_name="Secret", email="s@x.com")
+        Lead.objects.create(
+            customer=hidden_customer, title="Secret trip", assigned_to=self.manager
+        )
+        Lead.objects.filter(pk=self.lead.pk).update(assigned_to=self.agent)
+
+        form = BookingForm(user=self.agent)
+        self.assertIn(self.customer, form.fields["customer"].queryset)
+        self.assertNotIn(hidden_customer, form.fields["customer"].queryset)
+        self.assertEqual(list(form.fields["lead"].queryset), [self.lead])
+
+        manager_form = BookingForm(user=self.manager)
+        self.assertIn(hidden_customer, manager_form.fields["customer"].queryset)

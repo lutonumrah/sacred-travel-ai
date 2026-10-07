@@ -1,0 +1,11 @@
+{% extends "public/base.html" %}
+
+{% block title %}Payment link expired · {{ brand }}{% endblock %}
+
+{% block content %}
+  <div class="panel">
+    <h1 class="public-title">This payment link has expired</h1>
+    <p>For your security, payment links for booking <span class="mono">{{ booking.booking_number }}</span> only work for a limited time.</p>
+    <p class="muted">Reply in the chat or contact {{ brand }} and we will send you a new link.</p>
+  </div>
+{% endblock %}

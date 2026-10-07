@@ -151,9 +151,27 @@ REST_FRAMEWORK = {
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     "PAGE_SIZE": 25,
     "EXCEPTION_HANDLER": "core.api.exception_handler",
+    # nginx is the one proxy in front of gunicorn: the client IP is the last
+    # X-Forwarded-For entry. Set NUM_PROXIES=0 when serving without nginx.
+    "NUM_PROXIES": int(os.getenv("NUM_PROXIES", "1")),
 }
 
-CORS_ALLOW_ALL_ORIGINS = DEBUG
+# Per-IP limits for the anonymous widget and payment-link endpoints
+# (core.throttling). DRF rate syntax: "<count>/<second|minute|hour|day>".
+PUBLIC_API_THROTTLE_RATES = {
+    "widget_chat": os.getenv("THROTTLE_WIDGET_CHAT", "30/minute"),
+    # History + polling; the widget polls every 3–30s while a human is involved.
+    "widget_poll": os.getenv("THROTTLE_WIDGET_POLL", "120/minute"),
+    "widget_book": os.getenv("THROTTLE_WIDGET_BOOK", "20/hour"),
+    "public_pay": os.getenv("THROTTLE_PUBLIC_PAY", "60/hour"),
+}
+
+# --- CORS -----------------------------------------------------------------
+# Only the public widget / pay-link APIs answer cross-origin requests, and only
+# for origins on a registered website's domain (see core/cors.py). The staff
+# API and dashboard never send CORS headers.
+CORS_ALLOW_ALL_ORIGINS = False
+CORS_URLS_REGEX = r"^/api/v1/(conversations/widget|pay)/"
 
 # --- Behind a TLS-terminating proxy (nginx) ------------------------------
 # CSRF_TRUSTED_ORIGINS must list the full scheme+host the dashboard is served
@@ -177,6 +195,8 @@ RAZORPAY_KEY_SECRET = os.getenv("RAZORPAY_KEY_SECRET", "")
 RAZORPAY_WEBHOOK_SECRET = os.getenv("RAZORPAY_WEBHOOK_SECRET", "")
 
 BOOKING_TAX_PERCENT = Decimal(os.getenv("BOOKING_TAX_PERCENT", "5"))
+# How long a customer's /pay/<token>/ link works. Staff can issue a new one.
+PAYMENT_LINK_TTL_DAYS = int(os.getenv("PAYMENT_LINK_TTL_DAYS", "7"))
 
 # --- AI chat engine ------------------------------------------------------
 # The conversation engine always runs its deterministic rule layer (intent and

@@ -12,4 +12,5 @@ urlpatterns = [
     path("<int:pk>/pay/", views.PaymentOrderCreateView.as_view(), name="payment_create"),
     path("<int:pk>/pay/simulate/", views.PaymentSimulateView.as_view(), name="payment_simulate"),
     path("<int:pk>/cancel/", views.BookingCancelView.as_view(), name="cancel"),
+    path("<int:pk>/payment-link/", views.PaymentLinkIssueView.as_view(), name="payment_link"),
 ]

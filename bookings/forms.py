@@ -31,13 +31,14 @@ class BookingForm(StyledModelForm):
             "subtotal": "Tax is added automatically from BOOKING_TAX_PERCENT.",
         }
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, user, **kwargs):
         super().__init__(*args, **kwargs)
-        from crm.models import Customer, Lead
+        from crm.selectors import visible_customers, visible_leads
         from websites.selectors import list_websites
 
-        self.fields["customer"].queryset = Customer.objects.filter(is_deleted=False)
-        self.fields["lead"].queryset = Lead.objects.filter(is_deleted=False)
+        # Only people this user may see, or the dropdowns leak every customer's name.
+        self.fields["customer"].queryset = visible_customers(user)
+        self.fields["lead"].queryset = visible_leads(user)
         self.fields["website"].queryset = list_websites(status="active")
         self.fields["lead"].required = False
 

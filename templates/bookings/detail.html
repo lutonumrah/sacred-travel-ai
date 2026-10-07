@@ -84,6 +84,27 @@
         </dl>
       </div>
 
+      {% if booking.is_payable %}
+        <div class="panel">
+          <div class="panel-head"><h3>Customer payment link</h3></div>
+          {% if payment_link %}
+            <div class="form-row">
+              <label for="payment-link">No login needed · valid until {{ booking.payment_token_expires_at|date:"d M Y H:i" }}</label>
+              <input class="input mono" id="payment-link" value="{{ payment_link }}" readonly>
+            </div>
+            <div class="form-actions">
+              <button class="btn secondary" type="button" id="copy-payment-link">Copy customer payment link</button>
+            </div>
+          {% else %}
+            <p class="muted small">{% if booking.payment_token %}The last link has expired.{% else %}No link has been sent yet.{% endif %}</p>
+          {% endif %}
+          <form method="post" action="{% url 'bookings:payment_link' booking.pk %}" class="form-actions"
+                {% if payment_link %}onsubmit="return confirm('Issue a new link? The current one will stop working.')"{% endif %}>
+            {% csrf_token %}<button class="btn {% if payment_link %}ghost{% endif %}" type="submit">Issue new link</button>
+          </form>
+        </div>
+      {% endif %}
+
       {% if booking.status != 'cancelled' and booking.status != 'confirmed' and booking.status != 'refunded' %}
         <div class="panel">
           <div class="panel-head"><h3>Cancel</h3></div>
@@ -100,6 +121,23 @@
 {% endblock %}
 
 {% block scripts %}
+<script>
+  (function () {
+    var button = document.getElementById("copy-payment-link");
+    if (!button) return;
+    button.addEventListener("click", function () {
+      var input = document.getElementById("payment-link");
+      var done = function () { button.textContent = "Copied"; };
+      if (navigator.clipboard) {
+        navigator.clipboard.writeText(input.value).then(done);
+      } else {
+        input.select();
+        document.execCommand("copy");
+        done();
+      }
+    });
+  })();
+</script>
 {% if pending_payment and is_live_gateway %}
 <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
 {{ checkout_payload|json_script:"checkout-options" }}

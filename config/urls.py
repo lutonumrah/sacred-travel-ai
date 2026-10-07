@@ -15,6 +15,8 @@ urlpatterns = [
     path("conversations/", include("conversations.urls")),
     path("bookings/", include("bookings.urls")),
     path("dashboard/", include("dashboard.urls")),
+    # Customer-facing, no login: the token in the URL is the credential.
+    path("pay/", include("bookings.urls_public")),
     # API routes
     path("api/v1/", include("accounts.urls_api")),
     path("api/v1/websites/", include("websites.urls_api")),
@@ -23,6 +25,7 @@ urlpatterns = [
     path("api/v1/conversations/", include("conversations.urls_api")),
     path("api/v1/bookings/", include("bookings.urls_api")),
     path("api/v1/dashboard/", include("dashboard.urls_api")),
+    path("api/v1/pay/", include("bookings.urls_public_api")),
 ]
 
 if settings.DEBUG:

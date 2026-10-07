@@ -46,6 +46,11 @@ class BookingCreateView(SalesRequiredMixin, CreateView):
     page_subtitle = "Select a product and raise a pending booking."
     active_nav = "bookings"
 
+    def get_form_kwargs(self):
+        kwargs = super().get_form_kwargs()
+        kwargs["user"] = self.request.user
+        return kwargs
+
     def form_valid(self, form):
         booking = form.save(commit=False)
         booking.status = BookingStatus.PENDING
@@ -83,6 +88,11 @@ class BookingDetailView(SalesRequiredMixin, DetailView):
         ctx["pending_payment"] = pending
         ctx["is_live_gateway"] = payments.is_live()
         ctx["razorpay_key"] = payments.key_id()
+        ctx["payment_link"] = (
+            services.payment_url(booking, self.request)
+            if services.has_live_payment_link(booking)
+            else ""
+        )
         # Rendered with `json_script`, never inline, so customer data can't break out.
         ctx["checkout_payload"] = {
             "key": payments.key_id(),
@@ -140,6 +150,23 @@ class PaymentSimulateView(ManagerRequiredMixin, View):
             messages.error(request, error)
         else:
             messages.success(request, "Simulated payment captured — booking confirmed.")
+        return redirect("bookings:detail", pk=pk)
+
+
+class PaymentLinkIssueView(SalesRequiredMixin, View):
+    """Mint a new customer payment link; the previous one stops working."""
+
+    def post(self, request, pk):
+        booking = get_object_or_404(selectors.visible_bookings(request.user), pk=pk)
+        if not booking.is_payable:
+            messages.error(request, "Only pending or failed bookings can be paid by link.")
+            return redirect("bookings:detail", pk=pk)
+        services.issue_payment_link(booking=booking, actor=request.user, request=request)
+        messages.success(
+            request,
+            f"New payment link issued — valid until "
+            f"{booking.payment_token_expires_at:%d %b %Y}. The old link no longer works.",
+        )
         return redirect("bookings:detail", pk=pk)
 
 

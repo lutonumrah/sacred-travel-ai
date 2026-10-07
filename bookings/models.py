@@ -88,12 +88,20 @@ class Booking(TimeStampedModel):
     )
     confirmed_at = models.DateTimeField(null=True, blank=True)
     cancelled_at = models.DateTimeField(null=True, blank=True)
+    # The customer's no-login link to /pay/<token>/. Reissuing replaces it, so an
+    # old link stops working the moment staff send a new one.
+    payment_token = models.CharField(max_length=64, blank=True, db_index=True)
+    payment_token_expires_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         ordering = ["-created_at"]
 
     def __str__(self):
         return f"{self.booking_number} · {self.product_name}"
+
+    @property
+    def is_payable(self):
+        return self.status in (BookingStatus.PENDING, BookingStatus.FAILED)
 
 
 class Payment(TimeStampedModel):

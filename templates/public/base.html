@@ -1,0 +1,26 @@
+{% load static %}<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="referrer" content="no-referrer">
+  <title>{% block title %}{{ brand }}{% endblock %}</title>
+  <link rel="stylesheet" href="{% static 'css/app.css' %}">
+</head>
+<body class="public-body" style="--accent: {{ brand_color }}">
+  <div class="public-shell">
+    <header class="public-brand">
+      {% if booking.website.logo %}
+        <img src="{{ booking.website.logo.url }}" alt="" class="public-logo">
+      {% else %}
+        <span class="brand-mark">{{ brand|slice:":1"|upper }}</span>
+      {% endif %}
+      <strong>{{ brand }}</strong>
+    </header>
+    <main>{% block content %}{% endblock %}</main>
+    <footer class="public-footer muted small">{% block footer %}Secure payment by Razorpay · {{ brand }}{% endblock %}</footer>
+  </div>
+  {% block scripts %}{% endblock %}
+</body>
+</html>
