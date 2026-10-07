@@ -125,6 +125,10 @@ def handle_customer_message(*, conversation, text, request=None):
     """
     # A timed-out handoff hands this very message back to the AI.
     maybe_auto_resume(conversation=conversation, request=request)
+    # A customer writing into a closed chat has come back: reopen it so the
+    # chat shows in the live inbox again instead of being answered unseen.
+    if conversation.status == ConversationStatus.CLOSED:
+        reopen_conversation(conversation=conversation, request=request)
 
     post_message(
         conversation=conversation, sender_type=MessageSender.CUSTOMER, content=text
@@ -452,6 +456,23 @@ def close_conversation(*, conversation, user=None, request=None):
         content="Conversation closed.",
     )
     log_audit(actor=user, action="conversation.close", entity=conversation, request=request)
+    return conversation
+
+
+def reopen_conversation(*, conversation, request=None):
+    conversation.status = ConversationStatus.AI_ACTIVE
+    conversation.closed_at = None
+    conversation.handoff_requested_at = None
+    conversation.save(
+        update_fields=["status", "closed_at", "handoff_requested_at", "updated_at"]
+    )
+    post_message(
+        conversation=conversation,
+        sender_type=MessageSender.SYSTEM,
+        content="The customer returned; conversation reopened.",
+        is_internal=True,
+    )
+    log_audit(action="conversation.reopen", entity=conversation, request=request)
     return conversation
 
 
