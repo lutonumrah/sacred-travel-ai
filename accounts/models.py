@@ -22,6 +22,11 @@ class User(AbstractUser):
     phone = models.CharField(max_length=20, blank=True)
     is_active_employee = models.BooleanField(default=True)
     avatar = models.ImageField(upload_to="avatars/", blank=True, null=True)
+    # Copy in-app notifications to the user's inbox (core.notifications).
+    email_notifications = models.BooleanField(
+        default=True,
+        help_text="Also email lead, handoff, payment and follow-up notifications.",
+    )
 
     class Meta:
         ordering = ["username"]

@@ -1,0 +1,9 @@
+{% autoescape off %}{{ title }}
+{% if body %}
+{{ body }}
+{% endif %}{% if url %}
+Open: {{ url }}
+{% endif %}
+--
+You get these because email notifications are on for your account. Turn them off under My account in the dashboard: {{ prefs_url }}
+{% endautoescape %}

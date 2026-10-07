@@ -1,0 +1,37 @@
+{% comment %}
+Shared shell for every HTML email. Inline styles only: most mail clients drop
+<style> blocks and external CSS. Single 560px column that shrinks on phones.
+Context: brand, brand_color, and optionally preheader.
+{% endcomment %}<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>{{ brand }}</title>
+</head>
+<body style="margin:0;padding:0;background:#f4f5f7;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#1f2937;">
+  {% if preheader %}<div style="display:none;max-height:0;overflow:hidden;opacity:0;">{{ preheader }}</div>{% endif %}
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f5f7;">
+    <tr>
+      <td align="center" style="padding:24px 12px;">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;background:#ffffff;border-radius:10px;overflow:hidden;border:1px solid #e5e7eb;">
+          <tr>
+            <td style="background:{{ brand_color }};padding:16px 24px;color:#ffffff;font-size:18px;font-weight:700;">{{ brand }}</td>
+          </tr>
+          <tr>
+            <td style="padding:24px;font-size:15px;line-height:1.55;">
+              {% block content %}{% endblock %}
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:16px 24px;border-top:1px solid #e5e7eb;font-size:12px;color:#6b7280;">
+              {% block footer %}Sent by {{ brand }}.{% endblock %}
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

@@ -57,7 +57,7 @@
       </nav>
       <div class="sidebar-footer">
         {% if user.is_authenticated %}
-          <a href="{% url 'accounts:password_change' %}" title="Change password">{{ user.get_username }}</a>
+          <a href="{% url 'accounts:password_change' %}" title="My account">{{ user.get_username }}</a>
           <form method="post" action="{% url 'accounts:logout' %}" class="inline-form">
             {% csrf_token %}
             <button type="submit" class="btn small ghost" style="color:var(--sidebar-text);border-color:rgba(255,255,255,.2)">Logout</button>

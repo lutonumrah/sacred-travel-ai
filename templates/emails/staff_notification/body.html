@@ -1,0 +1,8 @@
+{% extends "emails/base.html" %}
+{% block content %}
+  <p style="margin:0 0 4px;font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:#6b7280;">{{ type_label }}</p>
+  <p style="margin:0 0 12px;font-size:17px;font-weight:700;">{{ title }}</p>
+  {% if body %}<p style="margin:0 0 12px;white-space:pre-line;">{{ body }}</p>{% endif %}
+  {% if url %}{% include "emails/_button.html" with url=url label="Open in dashboard" %}{% endif %}
+{% endblock %}
+{% block footer %}You get these because email notifications are on for your account. <a href="{{ prefs_url }}" style="color:#6b7280;">Turn them off</a>.{% endblock %}

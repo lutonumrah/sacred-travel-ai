@@ -1,0 +1,18 @@
+{% load static %}<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>{% block title %}Sign in{% endblock %} · Scared Travel AI</title>
+  <link rel="stylesheet" href="{% static 'css/app.css' %}">
+</head>
+<body>
+  <div class="auth-wrap">
+    <div class="auth-panel">
+      <div class="blank-badge">Scared Travel AI OS</div>
+      {% block panel %}{% endblock %}
+    </div>
+  </div>
+</body>
+</html>

@@ -1,0 +1,9 @@
+{% autoescape off %}Hello {{ user.get_full_name|default:user.get_username }},
+
+Someone asked to reset the password for your {{ brand }} dashboard account ({{ user.get_username }}).
+
+Choose a new password here:
+{{ reset_url }}
+
+The link works once and expires in {{ expiry_hours }} hours. If you did not ask for this, ignore this email; your password stays as it is.
+{% endautoescape %}

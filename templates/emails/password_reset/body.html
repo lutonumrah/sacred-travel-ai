@@ -1,0 +1,7 @@
+{% extends "emails/base.html" %}
+{% block content %}
+  <p style="margin:0 0 12px;">Hello {{ user.get_full_name|default:user.get_username }},</p>
+  <p style="margin:0 0 12px;">Someone asked to reset the password for your {{ brand }} dashboard account (<strong>{{ user.get_username }}</strong>).</p>
+  {% include "emails/_button.html" with url=reset_url label="Choose a new password" %}
+  <p style="margin:0;color:#6b7280;font-size:13px;">The link works once and expires in {{ expiry_hours }} hours. If you did not ask for this, ignore this email; your password stays as it is.</p>
+{% endblock %}

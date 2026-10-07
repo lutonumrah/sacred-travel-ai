@@ -210,3 +210,57 @@ AI_MODEL = os.getenv("AI_MODEL", "claude-opus-5-5")
 AI_ENABLED = os.getenv("AI_ENABLED", "true").lower() in ("1", "true", "yes")
 AI_MAX_HISTORY = int(os.getenv("AI_MAX_HISTORY", "20"))
 AI_TIMEOUT_SECONDS = float(os.getenv("AI_TIMEOUT_SECONDS", "30"))
+
+# --- Email ---------------------------------------------------------------
+# With no EMAIL_HOST, mail is printed to the container log instead of sent, so
+# nothing breaks before SMTP is configured. Every send goes through
+# core.emails, which logs failures instead of raising.
+EMAIL_HOST = os.getenv("EMAIL_HOST", "")
+EMAIL_BACKEND = os.getenv(
+    "EMAIL_BACKEND",
+    "django.core.mail.backends.smtp.EmailBackend"
+    if EMAIL_HOST
+    else "django.core.mail.backends.console.EmailBackend",
+)
+EMAIL_PORT = int(os.getenv("EMAIL_PORT", "587"))
+EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER", "")
+EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD", "")
+EMAIL_USE_TLS = os.getenv("EMAIL_USE_TLS", "True").lower() in ("1", "true", "yes")
+EMAIL_USE_SSL = os.getenv("EMAIL_USE_SSL", "False").lower() in ("1", "true", "yes")
+if EMAIL_USE_SSL:
+    # Django refuses both at once; implicit TLS (port 465) wins when asked for.
+    EMAIL_USE_TLS = False
+# Mail is sent inside the request; a hung SMTP server must not hold a worker.
+EMAIL_TIMEOUT = int(os.getenv("EMAIL_TIMEOUT", "10"))
+DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "Scared Travel <no-reply@localhost>")
+SERVER_EMAIL = os.getenv("SERVER_EMAIL", DEFAULT_FROM_EMAIL)
+# Absolute base for links in emails (payment links, password reset, dashboard
+# links). Scheme + host, no trailing slash. Never derived from the request's
+# Host header, which a client controls.
+SITE_URL = os.getenv("SITE_URL", "http://localhost:8000").rstrip("/")
+
+# --- Scheduled jobs and backups (manage.py run_scheduled_jobs) -----------
+# Nightly SQLite snapshot: taken on the first scheduler run at or after this
+# local hour (TIME_ZONE), once per day, keeping the newest BACKUP_KEEP_DAYS.
+# Defaults to a `backups/` folder beside the database file (/app/data/backups
+# in Docker, on the same volume as the database).
+BACKUP_DIR = os.getenv("BACKUP_DIR", "")
+BACKUP_HOUR = int(os.getenv("BACKUP_HOUR", "3"))
+BACKUP_KEEP_DAYS = int(os.getenv("BACKUP_KEEP_DAYS", "14"))
+BACKUP_ENABLED = os.getenv("BACKUP_ENABLED", "True").lower() in ("1", "true", "yes")
+
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "plain": {"format": "%(asctime)s %(levelname)s %(name)s: %(message)s"},
+    },
+    "handlers": {
+        "console": {"class": "logging.StreamHandler", "formatter": "plain"},
+    },
+    # Container logs are the only log store; app warnings and the scheduler's
+    # job lines end up in `docker compose logs`.
+    "root": {"handlers": ["console"], "level": os.getenv("LOG_LEVEL", "INFO")},
+    # 4xx responses are routine (expired links, permission checks); keep 5xx.
+    "loggers": {"django.request": {"level": "ERROR"}},
+}

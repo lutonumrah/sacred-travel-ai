@@ -1,13 +1,25 @@
 from django.contrib import messages
 from django.contrib.auth import views as auth_views
+from django.contrib.auth.mixins import LoginRequiredMixin
+from django.shortcuts import redirect
 from django.urls import reverse_lazy
+from django.views import View
 from django.views.generic import CreateView, TemplateView, UpdateView
 
 from core.mixins import AdminRequiredMixin, PageMixin
 from core.selectors import paginate
+from core.services import log_audit
 
 from . import selectors, services
-from .forms import TeamForm, UserCreateForm, UserFilterForm, UserUpdateForm
+from .forms import (
+    NotificationPreferencesForm,
+    PasswordResetForm,
+    SetPasswordForm,
+    TeamForm,
+    UserCreateForm,
+    UserFilterForm,
+    UserUpdateForm,
+)
 from .models import Team, User
 
 
@@ -23,14 +35,75 @@ class LogoutView(auth_views.LogoutView):
 class PasswordChangeView(PageMixin, auth_views.PasswordChangeView):
     template_name = "accounts/password_change.html"
     success_url = reverse_lazy("accounts:password_change_done")
-    page_title = "Change Password"
-    page_subtitle = "Update the password for your own account."
+    page_title = "My Account"
+
+
+    page_subtitle = "Update your password and how you hear about new work."
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        ctx.setdefault("prefs_form", NotificationPreferencesForm(instance=self.request.user))
+        return ctx
 
 
 class PasswordChangeDoneView(PageMixin, auth_views.PasswordChangeDoneView):
     template_name = "accounts/password_change_done.html"
     page_title = "Password Changed"
     page_subtitle = "Your new password is active."
+
+
+class PreferencesUpdateView(LoginRequiredMixin, View):
+    """The signed-in user's own email address and notification opt-in."""
+
+    def post(self, request):
+        form = NotificationPreferencesForm(request.POST, instance=request.user)
+        if form.is_valid():
+            form.save()
+            log_audit(
+                actor=request.user,
+                action="user.preferences_update",
+                entity=request.user,
+                metadata={"email_notifications": request.user.email_notifications},
+                request=request,
+            )
+            messages.success(request, "Your notification settings were saved.")
+        else:
+            messages.error(request, "Enter a valid email address.")
+        return redirect("accounts:password_change")
+
+
+# --- Forgotten password (no login) ------------------------------------------
+
+
+class PasswordResetView(auth_views.PasswordResetView):
+    template_name = "accounts/password_reset_form.html"
+    form_class = PasswordResetForm
+    success_url = reverse_lazy("accounts:password_reset_done")
+
+
+class PasswordResetDoneView(auth_views.PasswordResetDoneView):
+    template_name = "accounts/password_reset_done.html"
+
+
+class PasswordResetConfirmView(auth_views.PasswordResetConfirmView):
+    template_name = "accounts/password_reset_confirm.html"
+    form_class = SetPasswordForm
+    success_url = reverse_lazy("accounts:password_reset_complete")
+
+    def form_valid(self, form):
+        response = super().form_valid(form)
+        log_audit(
+            actor=None,
+            action="user.password_reset",
+            entity=form.user,
+            metadata={"username": form.user.get_username()},
+            request=self.request,
+        )
+        return response
+
+
+class PasswordResetCompleteView(auth_views.PasswordResetCompleteView):
+    template_name = "accounts/password_reset_complete.html"
 
 
 class UserListView(AdminRequiredMixin, TemplateView):
