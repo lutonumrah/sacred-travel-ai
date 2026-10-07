@@ -9,6 +9,7 @@ from django.db.models import Max
 from django.urls import reverse
 from django.utils import timezone
 
+from core.attribution import copy_attribution
 from core.notifications import notify, notify_managers
 from core.services import log_audit
 
@@ -270,6 +271,7 @@ def sync_lead(*, conversation, request=None):
             preferences=lead_preferences(requirements),
         )
         _apply_requirements(lead, requirements)
+        copy_attribution(conversation, lead)
         crm_services.create_lead(
             lead=lead,
             request=request,

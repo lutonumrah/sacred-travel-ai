@@ -1,7 +1,7 @@
 from django.conf import settings
 from django.db import models
 
-from core.models import TimeStampedModel
+from core.models import AttributionFields, TimeStampedModel
 from crm.models import Customer, Lead
 from websites.models import Website
 
@@ -20,7 +20,7 @@ class MessageSender(models.TextChoices):
     SYSTEM = "system", "System"
 
 
-class Conversation(TimeStampedModel):
+class Conversation(TimeStampedModel, AttributionFields):
     """AI / human chat session tied to a website and optional lead."""
 
     website = models.ForeignKey(

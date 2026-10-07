@@ -1,7 +1,7 @@
 from django.conf import settings
 from django.db import models
 
-from core.models import SoftDeleteModel, TimeStampedModel
+from core.models import AttributionFields, SoftDeleteModel, TimeStampedModel
 from websites.models import Website
 
 
@@ -50,7 +50,7 @@ class Customer(TimeStampedModel, SoftDeleteModel):
         return f"{self.first_name} {self.last_name}".strip()
 
 
-class Lead(TimeStampedModel, SoftDeleteModel):
+class Lead(TimeStampedModel, SoftDeleteModel, AttributionFields):
     """Travel lead with pipeline status."""
 
     customer = models.ForeignKey(

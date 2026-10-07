@@ -135,6 +135,8 @@
           {% endfor %}
         </div>
       {% endif %}
+
+      {% include "partials/_attribution.html" with rows=attribution_rows website=lead.website %}
     </div>
   </div>
 {% endblock %}

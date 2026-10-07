@@ -6,7 +6,8 @@ from django.views.generic import CreateView, DetailView, TemplateView, UpdateVie
 
 from bookings.selectors import visible_bookings
 from conversations.selectors import visible_conversations
-from core.mixins import SalesRequiredMixin
+from core.attribution import attribution_rows
+from core.mixins import ManagerRequiredMixin, SalesRequiredMixin
 from core.selectors import paginate
 
 from . import selectors, services
@@ -229,6 +230,7 @@ class LeadDetailView(SalesRequiredMixin, DetailView):
         ctx = super().get_context_data(**kwargs)
         lead = self.object
         ctx["preference_rows"] = selectors.preference_rows(lead.preferences)
+        ctx["attribution_rows"] = attribution_rows(lead)
         ctx["notes"] = lead.notes.select_related("author")
         ctx["activities"] = lead.activities.select_related("actor")[:50]
         ctx["follow_ups"] = lead.follow_ups.select_related("assigned_to")

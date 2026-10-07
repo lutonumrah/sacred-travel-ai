@@ -1475,3 +1475,84 @@ class StaffBookingFromChatTests(PublicWidgetFixture):
         })
         self.assertEqual(response.status_code, 404)
         self.assertFalse(Booking.objects.exists())
+
+
+# --------------------------------------------------------------------------
+# Batch 4: live inbox, knowledge base, source attribution
+# --------------------------------------------------------------------------
+
+class AttributionFlowTests(PublicWidgetFixture):
+    ATTRIBUTION = {
+        "utm_source": "google",
+        "utm_medium": "cpc",
+        "utm_campaign": "goa-winter",
+        "utm_term": "goa hotels",
+        "referrer": "https://www.google.com/",
+        "landing_page": "https://main.com/goa?utm_source=google",
+    }
+
+    def chat_with(self, message, attribution, session=""):
+        return self.client.post(
+            self.chat_url,
+            {
+                "key": self.key.public_key,
+                "message": message,
+                "session": session,
+                "attribution": attribution,
+            },
+            content_type="application/json",
+        ).json()["data"]
+
+    def test_chat_to_lead_to_booking(self):
+        data = self.chat_with("hotel in Goa, email me at ana@example.com", self.ATTRIBUTION)
+        conversation = Conversation.objects.get(session_key=data["session"])
+        self.assertEqual(conversation.utm_campaign, "goa-winter")
+        self.assertEqual(conversation.referrer, "https://www.google.com/")
+        lead = conversation.lead
+        self.assertEqual(lead.utm_source, "google")
+        self.assertEqual(lead.utm_term, "goa hotels")
+        self.assertEqual(lead.landing_page, "https://main.com/goa?utm_source=google")
+
+        card = data["reply"]["cards"][0]
+        self.book(data["session"], card["recommendation_id"])
+        booking = Booking.objects.get(conversation=conversation)
+        self.assertEqual(booking.utm_campaign, "goa-winter")
+        self.assertEqual(booking.utm_medium, "cpc")
+
+        manager = self.manager
+        self.client.force_login(manager)
+        for url in (
+            reverse("crm:lead_detail", args=[lead.pk]),
+            reverse("bookings:detail", args=[booking.pk]),
+        ):
+            page = self.client.get(url)
+            self.assertContains(page, "Source attribution")
+            self.assertContains(page, "goa-winter")
+
+    def test_first_touch_wins(self):
+        data = self.chat_with("hi", self.ATTRIBUTION)
+        self.chat_with("hello again", {"utm_campaign": "retargeting"}, session=data["session"])
+        conversation = Conversation.objects.get(session_key=data["session"])
+        self.assertEqual(conversation.utm_campaign, "goa-winter")
+
+    def test_values_are_validated_and_truncated(self):
+        data = self.chat_with(
+            "hi",
+            {
+                "utm_source": "x" * 500,
+                "utm_medium": "\x00email\n",
+                "referrer": "javascript:alert(1)",
+                "landing_page": "https://main.com/" + "p" * 900,
+                "is_deleted": True,
+            },
+        )
+        conversation = Conversation.objects.get(session_key=data["session"])
+        self.assertEqual(len(conversation.utm_source), 100)
+        self.assertEqual(conversation.utm_medium, "email")
+        self.assertEqual(conversation.referrer, "")
+        self.assertEqual(len(conversation.landing_page), 500)
+
+    def test_a_widget_without_attribution_still_works(self):
+        data = self.chat_with("hi", "not-a-dict")
+        conversation = Conversation.objects.get(session_key=data["session"])
+        self.assertEqual(conversation.utm_source, "")

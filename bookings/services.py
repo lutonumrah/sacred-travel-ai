@@ -10,6 +10,7 @@ from django.db import transaction
 from django.urls import reverse
 from django.utils import timezone
 
+from core.attribution import copy_attribution
 from core.notifications import notify, notify_many, notify_managers
 from core.services import log_audit
 
@@ -58,6 +59,9 @@ def create_booking(*, booking, actor=None, request=None):
         booking.created_by = actor
     if not booking.status:
         booking.status = BookingStatus.PENDING
+    # Credit the campaign that brought the customer in.
+    copy_attribution(booking.lead, booking)
+    copy_attribution(booking.conversation, booking)
     booking.save()
 
     log_audit(

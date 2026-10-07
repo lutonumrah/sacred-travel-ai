@@ -7,6 +7,7 @@ from rest_framework.views import APIView
 from bookings.services import BookingError
 from bookings.services import payment_url as booking_payment_url
 from core.api import EnvelopeMixin, ErrorResponse, SuccessResponse
+from core.attribution import apply_attribution
 from core.cors import allow_cors_for
 from core.permissions import IsSalesTeam
 from core.throttling import WidgetBookThrottle, WidgetChatThrottle, WidgetPollThrottle
@@ -150,6 +151,13 @@ class WidgetChatAPI(APIView):
         if conversation.website_id != website.pk:
             # A session key from another website must not be reused.
             return ErrorResponse("Session does not belong to this website.", status_code=403)
+
+        if created:
+            # UTM tags, referrer and landing page the widget read on the host
+            # page; the lead and any booking inherit them.
+            changed = apply_attribution(conversation, request.data.get("attribution"))
+            if changed:
+                conversation.save(update_fields=changed + ["updated_at"])
 
         # Any contact details the host page collected up front.
         provided = {

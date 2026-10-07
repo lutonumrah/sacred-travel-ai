@@ -4,6 +4,7 @@ from django.urls import reverse
 from django.views import View
 from django.views.generic import CreateView, DetailView, TemplateView
 
+from core.attribution import attribution_rows
 from core.mixins import ManagerRequiredMixin, SalesRequiredMixin
 from core.selectors import paginate
 
@@ -95,6 +96,7 @@ class BookingDetailView(SalesRequiredMixin, DetailView):
         ctx["payments"] = booking.payments.all()
         ctx["customer_email"] = selectors.booking_contact(booking)["email"]
         ctx["customer_emails"] = selectors.customer_emails(booking)[:20]
+        ctx["attribution_rows"] = attribution_rows(booking)
         pending = booking.payments.filter(status__in=["created", "pending"]).first()
         ctx["pending_payment"] = pending
         ctx["is_live_gateway"] = payments.is_live()

@@ -19,3 +19,23 @@ class SoftDeleteModel(models.Model):
 
     class Meta:
         abstract = True
+
+
+class AttributionFields(models.Model):
+    """Where a visitor came from: UTM tags, referring page and landing page.
+
+    Captured on the Conversation (widget) or Lead (website form) and copied
+    forward to the Lead and Booking, so reports can credit the campaign.
+    Values arrive from browsers: see `core.attribution.clean_attribution`.
+    """
+
+    utm_source = models.CharField(max_length=100, blank=True)
+    utm_medium = models.CharField(max_length=100, blank=True)
+    utm_campaign = models.CharField(max_length=150, blank=True)
+    utm_term = models.CharField(max_length=150, blank=True)
+    utm_content = models.CharField(max_length=150, blank=True)
+    referrer = models.CharField(max_length=500, blank=True)
+    landing_page = models.CharField(max_length=500, blank=True)
+
+    class Meta:
+        abstract = True

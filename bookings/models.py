@@ -2,7 +2,7 @@ from django.conf import settings
 from django.db import models
 
 from conversations.models import Conversation, Recommendation
-from core.models import TimeStampedModel
+from core.models import AttributionFields, TimeStampedModel
 from crm.models import Customer, Lead
 from websites.models import Website
 
@@ -27,7 +27,7 @@ class PaymentStatus(models.TextChoices):
     CANCELLED = "cancelled", "Cancelled"
 
 
-class Booking(TimeStampedModel):
+class Booking(TimeStampedModel, AttributionFields):
     booking_number = models.CharField(max_length=40, unique=True)
     website = models.ForeignKey(
         Website,

@@ -1,8 +1,14 @@
-from django.contrib import messages as django_messages
-from django.shortcuts import get_object_or_404, redirect
-from django.views import View
-from django.views.generic import DetailView, FormView, TemplateView
+from urllib.parse import urlencode
 
+from django.contrib import messages as django_messages
+from django.http import JsonResponse
+from django.shortcuts import get_object_or_404, redirect
+from django.template.loader import render_to_string
+from django.urls import reverse
+from django.views import View
+from django.views.generic import CreateView, DetailView, FormView, TemplateView, UpdateView
+
+from core.attribution import attribution_rows
 from core.mixins import AdminRequiredMixin, ManagerRequiredMixin, SalesRequiredMixin
 from core.selectors import paginate
 from core.services import log_audit
@@ -103,6 +109,7 @@ class ConversationDetailView(SalesRequiredMixin, DetailView):
         }
         ctx["preference_rows"] = preference_rows(requirements.get("preferences"))
         ctx["contact"] = conversation.context or {}
+        ctx["attribution_rows"] = attribution_rows(conversation)
         ctx["can_reply"] = conversation.status != ConversationStatus.CLOSED
         if self.request.user.is_manager:
             ctx["assign_form"] = ConversationAssignForm(

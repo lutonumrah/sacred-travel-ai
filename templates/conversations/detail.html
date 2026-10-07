@@ -162,6 +162,8 @@
           </ul>
         </div>
       {% endif %}
+
+      {% include "partials/_attribution.html" with rows=attribution_rows website=conversation.website %}
     </div>
   </div>
 {% endblock %}

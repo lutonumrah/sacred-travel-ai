@@ -425,11 +425,31 @@
       });
   }
 
+  // Which campaign brought the visitor here. Sent with the first message only;
+  // the server keeps the first touch and copies it to the lead and booking.
+  function attribution() {
+    var data = {};
+    try {
+      var params = new URLSearchParams(window.location.search);
+      ["utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content"].forEach(function (name) {
+        var value = params.get(name);
+        if (value) data[name] = value.slice(0, 150);
+      });
+      if (document.referrer) data.referrer = document.referrer.slice(0, 500);
+      data.landing_page = window.location.href.slice(0, 500);
+    } catch (e) {
+      // Old browser without URLSearchParams: attribution is optional.
+    }
+    return data;
+  }
+
   function send(text) {
     sendBtn.disabled = true;
     var thinking = append("…", "note");
+    var payload = { key: KEY, message: text, session: state.session || "" };
+    if (!state.session) payload.attribution = attribution();
 
-    request("POST", "/api/v1/conversations/widget/chat/", { key: KEY, message: text, session: state.session || "" })
+    request("POST", "/api/v1/conversations/widget/chat/", payload)
       .then(function (body) {
         thinking.parentNode.removeChild(thinking);
         if (!body.success || !body.data) {

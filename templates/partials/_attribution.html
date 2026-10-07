@@ -1,0 +1,9 @@
+{% comment %}Source attribution panel. Pass `rows` ([(label, value)]) and optionally `website`.{% endcomment %}
+<div class="panel">
+  <div class="panel-head"><h3>Source attribution</h3></div>
+  <dl class="definition">
+    {% if website %}<dt>Website</dt><dd>{{ website.name }} <span class="mono small">{{ website.source_identifier }}</span></dd>{% endif %}
+    {% for label, value in rows %}<dt>{{ label }}</dt><dd class="small break-all">{{ value }}</dd>{% endfor %}
+  </dl>
+  {% if not rows %}<p class="muted small">No campaign tags or referrer were recorded.</p>{% endif %}
+</div>
