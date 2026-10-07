@@ -1,0 +1,8 @@
+{% autoescape off %}Hello {{ name }},
+
+We have refunded {{ amount }} for booking {{ booking.booking_number }} ({{ booking.product_name }}). Depending on your bank it can take 5–7 working days to appear.{% if payment_reference %}
+
+Payment ref: {{ payment_reference }}{% endif %}
+
+{{ brand }}
+{% endautoescape %}

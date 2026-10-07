@@ -1,0 +1,8 @@
+{% extends "emails/base.html" %}
+{% block content %}
+  <p style="margin:0 0 12px;">Hello {{ name }},</p>
+  <p style="margin:0 0 12px;">Thank you for booking with {{ brand }}. Here is your booking:</p>
+  {% include "emails/_booking_summary.html" %}
+  {% include "emails/_button.html" with url=pay_url label="Complete your payment" %}
+  <p style="margin:0;color:#6b7280;font-size:13px;">No login needed. This link works until {{ booking.payment_token_expires_at|date:"d M Y" }}. Your booking is confirmed as soon as the payment goes through. If the link has expired, reply to this email and we will send a new one.</p>
+{% endblock %}

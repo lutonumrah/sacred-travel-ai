@@ -13,7 +13,7 @@ from django.utils import timezone
 from core.notifications import notify, notify_many, notify_managers
 from core.services import log_audit
 
-from . import payments
+from . import emails, payments
 from .models import Booking, BookingStatus, Payment, PaymentStatus, WebhookEvent
 
 logger = logging.getLogger(__name__)
@@ -359,6 +359,7 @@ def mark_booking_paid(*, booking, actor=None, request=None):
         metadata={"booking_id": booking.pk},
         exclude=booking.created_by,
     )
+    emails.send_confirmation(booking=booking, actor=actor)
     return booking
 
 
@@ -452,6 +453,7 @@ def cancel_booking(*, booking, actor=None, request=None, reason=""):
         body=body,
         actor=actor,
     )
+    emails.send_cancellation(booking=booking, reason=reason, actor=actor)
     return booking
 
 
@@ -488,12 +490,26 @@ def record_refund(*, payment, refund=None, payment_entity=None, actor=None, requ
             link=_booking_link(booking),
             metadata={"booking_id": booking.pk},
         )
+        emails.send_refund(
+            booking=booking,
+            amount=Decimal(int(refund.get("amount") or 0)) / 100,
+            currency=payment.currency,
+            payment_reference=payment.razorpay_payment_id,
+            actor=actor,
+        )
         return "partial refund recorded"
 
     if payment.status == PaymentStatus.REFUNDED:
         return "refund recorded"
     payment.status = PaymentStatus.REFUNDED
     payment.save(update_fields=["status", "updated_at"])
+    emails.send_refund(
+        booking=booking,
+        amount=payment.amount,
+        currency=payment.currency,
+        payment_reference=payment.razorpay_payment_id,
+        actor=actor,
+    )
 
     # Another settled payment on the same booking still pays for it.
     if booking.payments.filter(status=PaymentStatus.SUCCESS).exists():
@@ -781,13 +797,16 @@ def booking_from_recommendation(
     travel_start,
     travel_end=None,
     travelers=1,
+    guest=None,
     actor=None,
     request=None,
 ):
     """Turn a recommendation the customer (or an agent for them) picked into a pending booking.
 
     Returns `(booking, created)`. Asking twice for the same thing returns the
-    open booking instead of raising a duplicate.
+    open booking instead of raising a duplicate. `guest` is the name / email /
+    phone typed in the chat, used on the pay page and for the customer email.
+    A new booking's payment link is emailed to the customer.
     """
     from crm import services as crm_services
     from crm.models import LeadStatus
@@ -859,10 +878,12 @@ def booking_from_recommendation(
                 "quantity": quote["quantity"],
                 "description": quote["description"],
             },
+            **({"guest": guest} if guest else {}),
         },
     )
     create_booking(booking=booking, actor=actor, request=request)
     issue_payment_link(booking=booking, actor=actor, request=request)
+    emails.send_payment_link(booking=booking, actor=actor)
 
     staff = actor if (actor and getattr(actor, "is_authenticated", False)) else None
     who = f"{staff.get_username()} booked {item.name} for the customer" if staff else (

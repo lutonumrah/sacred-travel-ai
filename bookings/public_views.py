@@ -5,8 +5,6 @@ token is a 404 either way (the expired page just says so kindly and shows no
 price or personal details). Staff can issue a fresh link from the booking page.
 """
 
-import re
-
 from django.http import Http404
 from django.shortcuts import render
 from django.views import View
@@ -15,35 +13,20 @@ from rest_framework.views import APIView
 
 from core.api import ErrorResponse, SuccessResponse
 from core.cors import allow_cors_for
+from core.emails import brand_for
 from core.throttling import PublicPayThrottle
 
 from . import payments, selectors, services
 from .models import BookingStatus
 from .serializers import PaymentVerifySerializer
 
-DEFAULT_BRAND = "Scared Travel"
-DEFAULT_COLOR = "#0F766E"
-HEX_COLOR = re.compile(r"^#[0-9a-fA-F]{3,8}$")
-
 
 def _brand(booking):
-    website = booking.website
-    if website is None:
-        return DEFAULT_BRAND, DEFAULT_COLOR
-    # Goes into a style attribute: only a plain hex colour is allowed through.
-    color = website.primary_color if HEX_COLOR.match(website.primary_color or "") else DEFAULT_COLOR
-    return website.brand_name or website.name, color
+    return brand_for(booking.website)
 
 
 def _guest(booking):
-    """The contact typed when booking; the customer record only as a fallback."""
-    guest = (booking.summary or {}).get("guest") or {}
-    customer = booking.customer
-    return {
-        "name": guest.get("name") or customer.full_name,
-        "email": guest.get("email") or customer.email,
-        "phone": guest.get("phone") or customer.phone,
-    }
+    return selectors.booking_contact(booking)
 
 
 def _no_store(response):

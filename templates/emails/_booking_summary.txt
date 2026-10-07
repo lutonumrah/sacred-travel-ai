@@ -1,0 +1,5 @@
+Booking:    {{ booking.booking_number }}
+Trip:       {{ booking.product_name }}{% if booking.travel_start %}
+Dates:      {{ booking.travel_start|date:"D, d M Y" }}{% if booking.travel_end and booking.travel_end != booking.travel_start %} -> {{ booking.travel_end|date:"D, d M Y" }}{% endif %}{% endif %}
+Travellers: {{ booking.travelers_count }}
+Total:      {{ booking.currency }} {{ booking.total_amount|floatformat:2 }}

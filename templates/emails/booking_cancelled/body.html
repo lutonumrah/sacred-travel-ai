@@ -1,0 +1,7 @@
+{% extends "emails/base.html" %}
+{% block content %}
+  <p style="margin:0 0 12px;">Hello {{ name }},</p>
+  <p style="margin:0 0 12px;">Your booking <strong>{{ booking.booking_number }}</strong> ({{ booking.product_name }}) has been cancelled{% if reason %}: {{ reason }}{% endif %}. Any payment link we sent for it no longer works.</p>
+  {% if was_paid %}<p style="margin:0 0 12px;">Your payment will be refunded to the original payment method; you will get a separate note when it is processed.</p>{% endif %}
+  <p style="margin:0;">If this is unexpected, reply to this email and we will help.</p>
+{% endblock %}

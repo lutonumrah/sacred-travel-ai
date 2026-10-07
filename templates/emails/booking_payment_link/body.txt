@@ -1,0 +1,12 @@
+{% autoescape off %}Hello {{ name }},
+
+Thank you for booking with {{ brand }}. Here is your booking:
+
+{% include "emails/_booking_summary.txt" %}
+Pay securely here (no login needed):
+{{ pay_url }}
+
+This link works until {{ booking.payment_token_expires_at|date:"d M Y" }}. Your booking is confirmed as soon as the payment goes through. If the link has expired, reply to this email and we will send a new one.
+
+{{ brand }}
+{% endautoescape %}

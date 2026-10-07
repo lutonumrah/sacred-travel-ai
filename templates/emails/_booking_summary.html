@@ -1,0 +1,8 @@
+{% comment %}Booking summary table. Context: booking.{% endcomment %}
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;font-size:14px;margin:12px 0;">
+  <tr><td style="padding:6px 0;color:#6b7280;width:40%;">Booking</td><td style="padding:6px 0;font-family:monospace;">{{ booking.booking_number }}</td></tr>
+  <tr><td style="padding:6px 0;color:#6b7280;">Trip</td><td style="padding:6px 0;">{{ booking.product_name }}</td></tr>
+  {% if booking.travel_start %}<tr><td style="padding:6px 0;color:#6b7280;">Dates</td><td style="padding:6px 0;">{{ booking.travel_start|date:"D, d M Y" }}{% if booking.travel_end and booking.travel_end != booking.travel_start %} &rarr; {{ booking.travel_end|date:"D, d M Y" }}{% endif %}</td></tr>{% endif %}
+  <tr><td style="padding:6px 0;color:#6b7280;">Travellers</td><td style="padding:6px 0;">{{ booking.travelers_count }}</td></tr>
+  <tr><td style="padding:6px 0;color:#6b7280;border-top:1px solid #e5e7eb;">Total</td><td style="padding:6px 0;border-top:1px solid #e5e7eb;font-weight:700;">{{ booking.currency }} {{ booking.total_amount|floatformat:2 }}</td></tr>
+</table>

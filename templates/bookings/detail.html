@@ -100,10 +100,34 @@
           {% endif %}
           <form method="post" action="{% url 'bookings:payment_link' booking.pk %}" class="form-actions"
                 {% if payment_link %}onsubmit="return confirm('Issue a new link? The current one will stop working.')"{% endif %}>
-            {% csrf_token %}<button class="btn {% if payment_link %}ghost{% endif %}" type="submit">Issue new link</button>
+            {% csrf_token %}
+            {% if customer_email %}
+              <button class="btn" type="submit" name="send_email" value="1">Issue new link &amp; email customer</button>
+              <button class="btn ghost" type="submit">Issue new link only</button>
+            {% else %}
+              <button class="btn {% if payment_link %}ghost{% endif %}" type="submit">Issue new link</button>
+            {% endif %}
           </form>
+          {% if customer_email %}<p class="muted small">Emails go to {{ customer_email }}.</p>{% else %}<p class="muted small">The customer has no email address on file; copy the link and send it another way.</p>{% endif %}
         </div>
       {% endif %}
+
+      <div class="panel">
+        <div class="panel-head"><h3>Customer emails</h3></div>
+        {% if customer_emails %}
+          <ul class="plain-list small">
+            {% for row in customer_emails %}
+              <li>
+                {% if row.action == 'booking.email_sent' %}<span class="badge status-confirmed">Sent</span>{% else %}<span class="badge status-failed">Failed</span>{% endif %}
+                {{ row.metadata.label|default:row.metadata.kind }} → {{ row.metadata.to }}
+                <div class="muted">{{ row.created_at|date:"d M Y H:i" }}{% if row.actor %} · {{ row.actor.get_username }}{% endif %}</div>
+              </li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <p class="muted small">No emails sent for this booking yet.</p>
+        {% endif %}
+      </div>
 
       {% if booking.status != 'cancelled' and booking.status != 'confirmed' and booking.status != 'refunded' %}
         <div class="panel">

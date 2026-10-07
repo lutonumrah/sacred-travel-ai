@@ -9,6 +9,12 @@ class BookingForm(StyledModelForm):
     product_type = forms.ChoiceField(
         choices=[("hotel", "Hotel"), ("car", "Car Rental"), ("package", "Tour Package")]
     )
+    email_customer = forms.BooleanField(
+        required=False,
+        initial=True,
+        label="Email the payment link to the customer",
+        help_text="Sent to the customer's email address, if they have one.",
+    )
 
     class Meta:
         model = Booking

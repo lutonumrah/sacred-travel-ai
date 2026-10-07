@@ -932,3 +932,196 @@ class BookingFormScopeTests(BookingFixture):
 
         manager_form = BookingForm(user=self.manager)
         self.assertIn(hidden_customer, manager_form.fields["customer"].queryset)
+
+
+# --------------------------------------------------------------------------
+# Batch 3: customer emails
+# --------------------------------------------------------------------------
+
+from django.core import mail  # noqa: E402
+
+from accounts.models import AuditLog  # noqa: E402
+from crm.models import LeadActivity  # noqa: E402
+
+
+@override_settings(SITE_URL="https://umrah.example", DEFAULT_FROM_EMAIL="bookings@umrah.example")
+class CustomerEmailTests(BookingFixture):
+    def setUp(self):
+        super().setUp()
+        cache.clear()
+        self.website.brand_name = "Umrah Co"
+        self.website.save()
+        self.conversation, _ = chat_services.start_conversation(website=self.website)
+        self.conversation.lead = self.lead
+        self.conversation.customer = self.customer
+        self.conversation.save()
+        self.recommendation = Recommendation.objects.create(
+            conversation=self.conversation,
+            inventory_type="package",
+            object_id=self.package.pk,
+            title=self.package.name,
+            price=self.package.base_price,
+        )
+
+    def book_from_chat(self, **kwargs):
+        with self.captureOnCommitCallbacks(execute=True):
+            booking, created = services.booking_from_recommendation(
+                recommendation=self.recommendation,
+                customer=self.customer,
+                travel_start=timezone.localdate() + timedelta(days=20),
+                travelers=1,
+                **kwargs,
+            )
+        return booking
+
+    def pay(self, booking):
+        with self.captureOnCommitCallbacks(execute=True):
+            services.simulate_checkout(booking=booking)
+        booking.refresh_from_db()
+        return booking
+
+    def test_a_chat_booking_emails_the_absolute_pay_link(self):
+        booking = self.book_from_chat()
+
+        self.assertEqual(len(mail.outbox), 1)
+        message = mail.outbox[0]
+        self.assertEqual(message.to, ["ana@x.com"])
+        self.assertEqual(
+            message.subject, f"Your booking {booking.booking_number} — complete your payment"
+        )
+        link = f"https://umrah.example/pay/{booking.payment_token}/"
+        self.assertIn(link, message.body)
+        html = message.alternatives[0][0]
+        self.assertIn(link, html)
+        self.assertIn("Umrah Co", html)
+        self.assertIn("Goa Escape", message.body)
+        self.assertEqual(message.from_email, "Umrah Co <bookings@umrah.example>")
+        # Recorded where staff can see it.
+        sent = AuditLog.objects.get(action="booking.email_sent")
+        self.assertEqual(sent.metadata["kind"], "payment_link")
+        self.assertEqual(sent.entity_id, str(booking.pk))
+        self.assertTrue(LeadActivity.objects.filter(lead=self.lead, activity_type="email"))
+
+    def test_the_guest_email_typed_in_the_chat_wins(self):
+        self.book_from_chat(guest={"name": "Ana R", "email": "ana.typed@x.com", "phone": ""})
+        self.assertEqual(mail.outbox[0].to, ["ana.typed@x.com"])
+        self.assertIn("Hello Ana R", mail.outbox[0].body)
+
+    def test_asking_twice_does_not_email_twice(self):
+        self.book_from_chat()
+        self.book_from_chat()
+        self.assertEqual(len(mail.outbox), 1)
+
+    def test_no_email_when_the_customer_has_none(self):
+        self.customer.email = ""
+        self.customer.save()
+        booking = self.book_from_chat()
+        self.assertEqual(mail.outbox, [])
+        self.assertEqual(booking.status, BookingStatus.PENDING)
+        self.assertFalse(AuditLog.objects.filter(action__startswith="booking.email"))
+
+    def test_payment_sends_a_confirmation_with_the_payment_reference(self):
+        booking = self.pay(self.book_from_chat())
+
+        self.assertEqual(booking.status, BookingStatus.CONFIRMED)
+        confirmation = mail.outbox[-1]
+        self.assertEqual(confirmation.subject, f"Booking confirmed: {booking.booking_number}")
+        reference = booking.payments.get(status=PaymentStatus.SUCCESS).razorpay_payment_id
+        self.assertTrue(reference)
+        self.assertIn(reference, confirmation.body)
+        self.assertIn(reference, confirmation.alternatives[0][0])
+
+    def test_smtp_failure_never_breaks_booking_or_payment(self):
+        with mock.patch(
+            "django.core.mail.EmailMultiAlternatives.send", side_effect=OSError("SMTP down")
+        ), self.assertLogs("core.emails", "ERROR"):
+            booking = self.book_from_chat()
+            booking = self.pay(booking)
+
+        self.assertEqual(booking.status, BookingStatus.CONFIRMED)
+        self.assertEqual(mail.outbox, [])
+        failed = AuditLog.objects.filter(action="booking.email_failed")
+        self.assertEqual(
+            sorted(failed.values_list("metadata__kind", flat=True)), ["confirmed", "payment_link"]
+        )
+
+    def test_nothing_is_mailed_when_the_booking_rolls_back(self):
+        # Fails after the email was queued: the rollback must drop it too.
+        with mock.patch(
+            "conversations.services.post_message", side_effect=RuntimeError("boom")
+        ), self.captureOnCommitCallbacks(execute=True):
+            with self.assertRaises(RuntimeError):
+                services.booking_from_recommendation(
+                    recommendation=self.recommendation,
+                    customer=self.customer,
+                    travel_start=timezone.localdate() + timedelta(days=20),
+                )
+        self.assertEqual(mail.outbox, [])
+
+    def test_cancellation_and_refund_notices(self):
+        booking = self.pay(self.book_from_chat())
+        payment = booking.payments.get(status=PaymentStatus.SUCCESS)
+        mail.outbox.clear()
+
+        with self.captureOnCommitCallbacks(execute=True):
+            services.cancel_booking(booking=booking, actor=self.manager, reason="Visa refused")
+        self.assertEqual(mail.outbox[0].subject, f"Booking {booking.booking_number} cancelled")
+        self.assertIn("Visa refused", mail.outbox[0].body)
+        self.assertIn("refunded", mail.outbox[0].body)
+
+        with self.captureOnCommitCallbacks(execute=True):
+            services.record_refund(
+                payment=payment, refund={"id": "rfnd_1", "amount": 2520000},
+                payment_entity={"refund_status": "full"},
+            )
+        self.assertEqual(
+            mail.outbox[1].subject, f"Refund processed for booking {booking.booking_number}"
+        )
+        self.assertIn("INR 25,200.00", mail.outbox[1].body)
+
+    def test_staff_booking_issues_a_link_and_emails_it_when_ticked(self):
+        self.client.force_login(self.agent)
+        data = {
+            "customer": self.customer.pk,
+            "website": self.website.pk,
+            "product_type": "package",
+            "product_id": self.package.pk,
+            "product_name": "Goa Escape",
+            "travelers_count": 2,
+            "currency": "INR",
+            "subtotal": "1000",
+        }
+        with self.captureOnCommitCallbacks(execute=True):
+            self.client.post(reverse("bookings:create"), dict(data, email_customer="on"))
+        booking = Booking.objects.get()
+        self.assertTrue(services.has_live_payment_link(booking))
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertIn(f"https://umrah.example/pay/{booking.payment_token}/", mail.outbox[0].body)
+
+        with self.captureOnCommitCallbacks(execute=True):
+            self.client.post(reverse("bookings:create"), data)
+        self.assertEqual(Booking.objects.count(), 2)
+        self.assertEqual(len(mail.outbox), 1)
+
+    def test_issue_new_link_can_email_the_customer(self):
+        booking = self.book_from_chat()
+        old_token = booking.payment_token
+        mail.outbox.clear()
+        self.client.force_login(self.manager)
+
+        with self.captureOnCommitCallbacks(execute=True):
+            self.client.post(reverse("bookings:payment_link", args=[booking.pk]))
+        self.assertEqual(mail.outbox, [])
+
+        with self.captureOnCommitCallbacks(execute=True):
+            self.client.post(
+                reverse("bookings:payment_link", args=[booking.pk]), {"send_email": "1"}
+            )
+        booking.refresh_from_db()
+        self.assertNotEqual(booking.payment_token, old_token)
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertIn(booking.payment_token, mail.outbox[0].body)
+
+        page = self.client.get(reverse("bookings:detail", args=[booking.pk])).content.decode()
+        self.assertIn("Customer emails", page)
+        self.assertIn("Payment link → ana@x.com", page)

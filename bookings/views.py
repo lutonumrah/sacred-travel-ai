@@ -7,7 +7,7 @@ from django.views.generic import CreateView, DetailView, TemplateView
 from core.mixins import ManagerRequiredMixin, SalesRequiredMixin
 from core.selectors import paginate
 
-from . import payments, selectors, services
+from . import emails, payments, selectors, services
 from .forms import BookingFilterForm, BookingForm, PaymentFilterForm
 from .models import Booking, BookingStatus, Notification, Payment
 
@@ -55,8 +55,17 @@ class BookingCreateView(SalesRequiredMixin, CreateView):
         booking = form.save(commit=False)
         booking.status = BookingStatus.PENDING
         services.create_booking(booking=booking, actor=self.request.user, request=self.request)
+        # Every staff booking gets a customer link straight away, ready to copy or send.
+        services.issue_payment_link(booking=booking, actor=self.request.user, request=self.request)
         self.object = booking
-        messages.success(self.request, f"Booking {booking.booking_number} created.")
+        emailed = form.cleaned_data.get("email_customer") and emails.send_payment_link(
+            booking=booking, actor=self.request.user
+        )
+        messages.success(
+            self.request,
+            f"Booking {booking.booking_number} created"
+            + (" and the payment link emailed to the customer." if emailed else "."),
+        )
         return redirect(self.get_success_url())
 
     def get_success_url(self):
@@ -84,6 +93,8 @@ class BookingDetailView(SalesRequiredMixin, DetailView):
         ctx = super().get_context_data(**kwargs)
         booking = self.object
         ctx["payments"] = booking.payments.all()
+        ctx["customer_email"] = selectors.booking_contact(booking)["email"]
+        ctx["customer_emails"] = selectors.customer_emails(booking)[:20]
         pending = booking.payments.filter(status__in=["created", "pending"]).first()
         ctx["pending_payment"] = pending
         ctx["is_live_gateway"] = payments.is_live()
@@ -162,11 +173,16 @@ class PaymentLinkIssueView(SalesRequiredMixin, View):
             messages.error(request, "Only pending or failed bookings can be paid by link.")
             return redirect("bookings:detail", pk=pk)
         services.issue_payment_link(booking=booking, actor=request.user, request=request)
-        messages.success(
-            request,
+        text = (
             f"New payment link issued — valid until "
-            f"{booking.payment_token_expires_at:%d %b %Y}. The old link no longer works.",
+            f"{booking.payment_token_expires_at:%d %b %Y}. The old link no longer works."
         )
+        if request.POST.get("send_email"):
+            if emails.send_payment_link(booking=booking, actor=request.user):
+                text += " It has been emailed to the customer."
+            else:
+                text += " The customer has no email address, so nothing was sent."
+        messages.success(request, text)
         return redirect("bookings:detail", pk=pk)
 
 

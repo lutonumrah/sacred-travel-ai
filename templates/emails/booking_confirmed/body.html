@@ -1,0 +1,8 @@
+{% extends "emails/base.html" %}
+{% block content %}
+  <p style="margin:0 0 12px;">Hello {{ name }},</p>
+  <p style="margin:0 0 12px;"><strong>We have received your payment and your booking is confirmed.</strong></p>
+  {% include "emails/_booking_summary.html" %}
+  {% if payment_reference %}<p style="margin:0 0 12px;font-size:13px;color:#6b7280;">Payment reference: <span style="font-family:monospace;color:#1f2937;">{{ payment_reference }}</span></p>{% endif %}
+  <p style="margin:0;">Keep this email for your records. Our team will be in touch with your travel details.</p>
+{% endblock %}

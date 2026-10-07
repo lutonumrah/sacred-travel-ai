@@ -1,0 +1,6 @@
+{% extends "emails/base.html" %}
+{% block content %}
+  <p style="margin:0 0 12px;">Hello {{ name }},</p>
+  <p style="margin:0 0 12px;">We have refunded <strong>{{ amount }}</strong> for booking <strong>{{ booking.booking_number }}</strong> ({{ booking.product_name }}). Depending on your bank it can take 5–7 working days to appear.</p>
+  {% if payment_reference %}<p style="margin:0;font-size:13px;color:#6b7280;">Payment reference: <span style="font-family:monospace;color:#1f2937;">{{ payment_reference }}</span></p>{% endif %}
+{% endblock %}

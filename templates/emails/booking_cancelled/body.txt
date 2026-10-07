@@ -1,0 +1,10 @@
+{% autoescape off %}Hello {{ name }},
+
+Your booking {{ booking.booking_number }} ({{ booking.product_name }}) has been cancelled{% if reason %}: {{ reason }}{% endif %}. Any payment link we sent for it no longer works.
+{% if was_paid %}
+Your payment will be refunded to the original payment method; you will get a separate note when it is processed.
+{% endif %}
+If this is unexpected, reply to this email and we will help.
+
+{{ brand }}
+{% endautoescape %}

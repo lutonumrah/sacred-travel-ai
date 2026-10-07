@@ -174,6 +174,7 @@ class ConversationBookView(SalesRequiredMixin, View):
     """"Book this for the customer": the same service the widget uses."""
 
     def post(self, request, pk):
+        from bookings.selectors import booking_contact
         from bookings.services import BookingError, booking_from_recommendation
 
         conversation = get_object_or_404(selectors.visible_conversations(request.user), pk=pk)
@@ -205,7 +206,12 @@ class ConversationBookView(SalesRequiredMixin, View):
             return redirect("conversations:detail", pk=pk)
         django_messages.success(
             request,
-            f"Booking {booking.booking_number} created — send the customer the payment link."
+            f"Booking {booking.booking_number} created"
+            + (
+                " — the payment link has been emailed to the customer."
+                if booking_contact(booking)["email"]
+                else " — send the customer the payment link."
+            )
             if created
             else f"Booking {booking.booking_number} already exists for this option.",
         )

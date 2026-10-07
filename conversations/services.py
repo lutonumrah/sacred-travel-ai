@@ -139,6 +139,8 @@ def handle_customer_message(*, conversation, text, request=None):
                 body=text[:140],
                 link=reverse("conversations:detail", args=[conversation.pk]),
                 metadata={"conversation_id": conversation.pk},
+                # One per message: in-app only, or a busy chat floods the inbox.
+                email=False,
             )
         return TurnResult()
 
@@ -664,14 +666,10 @@ def book_from_chat(
         travel_start=travel_start,
         travel_end=travel_end,
         travelers=travelers,
+        # Shown on the pay page, used for checkout prefill and the payment-link
+        # email: the details typed in this chat, not whatever an existing
+        # customer record holds.
+        guest={"name": name, "email": email or customer.email, "phone": phone or customer.phone},
         request=request,
     )
-    if created:
-        # Shown on the pay page and used for checkout prefill: the details typed
-        # in this chat, not whatever an existing customer record holds.
-        booking.summary = {
-            **booking.summary,
-            "guest": {"name": name, "email": email or customer.email, "phone": phone or customer.phone},
-        }
-        booking.save(update_fields=["summary", "updated_at"])
     return booking, created

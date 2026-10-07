@@ -27,6 +27,30 @@ def booking_for_payment_token(token):
     )
 
 
+def booking_contact(booking):
+    """The contact typed when booking; the customer record only as a fallback."""
+    guest = (booking.summary or {}).get("guest") or {}
+    customer = booking.customer
+    return {
+        "name": guest.get("name") or customer.full_name,
+        "email": guest.get("email") or customer.email,
+        "phone": guest.get("phone") or customer.phone,
+    }
+
+
+# Audit actions written by bookings.emails for each customer email attempt.
+EMAIL_AUDIT_ACTIONS = ("booking.email_sent", "booking.email_failed")
+
+
+def customer_emails(booking):
+    """Emails sent (or attempted) to this booking's customer, newest first."""
+    from accounts.models import AuditLog
+
+    return AuditLog.objects.filter(
+        entity_type="Booking", entity_id=str(booking.pk), action__in=EMAIL_AUDIT_ACTIONS
+    ).select_related("actor")
+
+
 def list_bookings(*, q="", status="", website=None, date_from=None, date_to=None, user=None):
     base = visible_bookings(user) if user is not None else Booking.objects.all()
     queryset = base.select_related("customer", "website", "lead", "created_by")

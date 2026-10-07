@@ -1,0 +1,10 @@
+{% autoescape off %}Hello {{ name }},
+
+We have received your payment and your booking is confirmed.
+
+{% include "emails/_booking_summary.txt" %}{% if payment_reference %}Payment ref: {{ payment_reference }}
+{% endif %}
+Keep this email for your records. Our team will be in touch with your travel details.
+
+{{ brand }}
+{% endautoescape %}
