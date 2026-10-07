@@ -1,19 +1,16 @@
 {% extends "layouts/base.html" %}
 
 {% block page_actions %}
-  <form method="get" class="inline-form">
-    <select class="input" name="days" onchange="this.form.submit()">
-      <option value="7" {% if days == 7 %}selected{% endif %}>Last 7 days</option>
-      <option value="30" {% if days == 30 %}selected{% endif %}>Last 30 days</option>
-      <option value="90" {% if days == 90 %}selected{% endif %}>Last 90 days</option>
-      <option value="365" {% if days == 365 %}selected{% endif %}>Last year</option>
-    </select>
-  </form>
-  <a class="btn ghost" href="{% url 'dashboard:report_export' 'leads' %}">Leads CSV</a>
-  <a class="btn ghost" href="{% url 'dashboard:report_export' 'bookings' %}">Bookings CSV</a>
+  {% with qs=filters.querystring %}
+    <a class="btn ghost" href="{% url 'dashboard:report_export' 'leads' %}{% if qs %}?{{ qs }}{% endif %}">Leads CSV</a>
+    <a class="btn ghost" href="{% url 'dashboard:report_export' 'bookings' %}{% if qs %}?{{ qs }}{% endif %}">Bookings CSV</a>
+    <a class="btn ghost" href="{% url 'dashboard:report_export' 'revenue' %}{% if qs %}?{{ qs }}{% endif %}">Revenue CSV</a>
+    <a class="btn ghost" href="{% url 'dashboard:report_export' 'conversion' %}{% if qs %}?{{ qs }}{% endif %}">Conversion CSV</a>
+  {% endwith %}
 {% endblock %}
 
 {% block content %}
+  {% include "dashboard/_report_filters.html" %}
   <div class="kpi-grid">
     <div class="kpi accent"><div class="kpi-label">Leads</div><div class="kpi-value">{{ kpis.leads_total }}</div></div>
     <div class="kpi ok"><div class="kpi-label">Converted</div><div class="kpi-value">{{ kpis.leads_converted }}</div>
@@ -77,6 +74,18 @@
         </table>
       </div>
     </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head"><h2>Conversion funnel by website and source</h2>
+      <span class="muted small">Leads created {{ kpis.start|date:"d M" }} – {{ kpis.end|date:"d M Y" }} and what they went on to book</span></div>
+    {% include "dashboard/_funnel_table.html" with rows=funnel first="Website" second="Source" empty_title="No chats or leads in this period" %}
+  </div>
+
+  <div class="panel">
+    <div class="panel-head"><h2>By campaign</h2>
+      <span class="muted small">UTM source / medium / campaign captured by the chat widget and website forms</span></div>
+    {% include "dashboard/_funnel_table.html" with rows=campaigns first="Campaign" empty_title="No campaign data in this period" %}
   </div>
 
   <div class="panel">

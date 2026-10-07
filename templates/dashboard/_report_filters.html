@@ -1,0 +1,21 @@
+{% comment %}Website + period filter shared by reports and analytics. Needs `filters`; `hide_website` drops the website menu.{% endcomment %}
+<form method="get" class="filter-bar report-filters">
+  {% if not hide_website %}
+    <div class="form-row"><label for="id_website">Website</label>{{ filters.form.website }}</div>
+  {% endif %}
+  <div class="form-row"><label for="id_days">Period</label>
+    <select class="input" name="days" id="id_days">
+      <option value="7" {% if filters.days == 7 %}selected{% endif %}>Last 7 days</option>
+      <option value="30" {% if filters.days == 30 %}selected{% endif %}>Last 30 days</option>
+      <option value="90" {% if filters.days == 90 %}selected{% endif %}>Last 90 days</option>
+      <option value="365" {% if filters.days == 365 %}selected{% endif %}>Last year</option>
+    </select>
+  </div>
+  <div class="form-row"><label for="id_date_from">From</label>{{ filters.form.date_from }}</div>
+  <div class="form-row"><label for="id_date_to">To</label>{{ filters.form.date_to }}</div>
+  <div class="form-row filter-actions">
+    <button class="btn" type="submit">Apply</button>
+    <a class="btn ghost" href="{{ request.path }}">Reset</a>
+  </div>
+</form>
+<p class="muted small">Showing {{ filters.start|date:"d M Y" }} – {{ filters.end|date:"d M Y" }}{% if filters.custom_range %} (custom range; it overrides the period){% endif %}{% if filters.website %} · {{ filters.website.name }}{% endif %}.</p>

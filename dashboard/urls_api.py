@@ -41,45 +41,67 @@ class NotificationsAPI(EnvelopeMixin, generics.ListAPIView):
 
 
 class ReportsAPI(APIView):
+    """Same filters as the reports page: website (id), days, date_from / date_to."""
+
     permission_classes = [IsManager]
 
     def get(self, request):
-        days = _days(request)
+        from .views import report_filters
+
+        filters = report_filters(request, 30)
+        scope = {"website": filters["website"], "start": filters["start"], "end": filters["end"]}
         return SuccessResponse(
             {
-                "days": days,
-                "kpis": selectors.overview_kpis(days=days),
-                "leads_by_source": selectors.leads_by_source(days=days),
-                "leads_by_status": selectors.leads_by_status(),
-                "leads_by_day": selectors.leads_by_day(days=days),
-                "revenue_by_day": selectors.revenue_by_day(days=days),
-                "bookings": selectors.booking_report(days=days),
-                "top_destinations": selectors.top_destinations(days=days),
+                "days": filters["days"],
+                "start": filters["start"],
+                "end": filters["end"],
+                "website": filters["website"].pk if filters["website"] else None,
+                "kpis": selectors.overview_kpis(**scope),
+                "leads_by_source": selectors.leads_by_source(**scope),
+                "leads_by_status": selectors.leads_by_status(**scope),
+                "leads_by_day": selectors.leads_by_day(**scope),
+                "revenue_by_day": selectors.revenue_by_day(**scope),
+                "bookings": selectors.booking_report(**scope),
+                "top_destinations": selectors.top_destinations(**scope),
+                "conversion": selectors.conversion_funnel(
+                    group_by=("website", "source"), **scope
+                ),
+                "campaigns": selectors.conversion_funnel(group_by=("campaign",), **scope),
             }
         )
 
 
 class AnalyticsAPI(APIView):
+    """Per-website funnel and per-employee performance; days or date_from / date_to."""
+
     permission_classes = [IsManager]
 
     def get(self, request):
-        days = _days(request, 90)
+        from .views import report_filters
+
+        filters = report_filters(request, 90)
+        scope = {"start": filters["start"], "end": filters["end"]}
         return SuccessResponse(
             {
-                "days": days,
+                "days": filters["days"],
+                "start": filters["start"],
+                "end": filters["end"],
                 "websites": [
                     {
                         "id": row["website"].pk,
                         "name": row["website"].name,
                         "source_identifier": row["website"].source_identifier,
+                        "conversations": row["conversations"],
+                        "chats_with_lead": row["chats_with_lead"],
+                        "chat_to_lead_rate": row["chat_to_lead_rate"],
                         "leads": row["leads"],
                         "converted": row["converted"],
                         "conversion_rate": row["conversion_rate"],
-                        "conversations": row["conversations"],
                         "bookings": row["bookings"],
+                        "paid_bookings": row["paid_bookings"],
                         "revenue": row["revenue"],
                     }
-                    for row in selectors.website_performance(days=days)
+                    for row in selectors.website_performance(**scope)
                 ],
                 "employees": [
                     {
@@ -89,10 +111,21 @@ class AnalyticsAPI(APIView):
                         "converted": row["converted"],
                         "conversion_rate": row["conversion_rate"],
                         "open_follow_ups": row["open_follow_ups"],
+                        "conversations": row["conversations"],
+                        "handoffs": row["handoffs"],
+                        "responded_handoffs": row["responded_handoffs"],
+                        "avg_first_response_seconds": row["avg_first_response_seconds"],
                         "revenue": row["revenue"],
                     }
-                    for row in selectors.employee_performance(days=days)
+                    for row in selectors.employee_performance(**scope)
                 ],
+                "definitions": {
+                    "avg_first_response_seconds": selectors.FIRST_RESPONSE_DEFINITION,
+                    "conversion_rate": (
+                        "Converted leads / leads assigned and created in the period."
+                    ),
+                    "chat_to_lead_rate": "Chats started in the period that produced a lead.",
+                },
             }
         )
 

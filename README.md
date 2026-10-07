@@ -234,10 +234,17 @@ managers). Forgotten passwords are reset from the login page by email.
 
 The overview gives KPIs, a lead sparkline, pipeline bars and recent activity,
 filterable by website and period. Reports cover leads by source and status,
-bookings by product, revenue by day and top destinations, with CSV export.
-Analytics compares **website performance** (leads, conversion, revenue per
-brand) and **employee performance** (leads handled, conversion, open
-follow-ups, revenue).
+bookings by product, revenue by day, top destinations, a conversion funnel
+(chats → leads → qualified → bookings → paid → revenue) by website and source,
+and a by-campaign breakdown — all filterable by website and by period or an
+explicit From/To range. CSV exports (leads, bookings, revenue by
+day/website/product, conversion funnel with campaign) honour the same filters.
+Analytics compares **website performance** (chats, chat→lead rate, leads,
+conversion, bookings, paid, revenue per brand) and **employee performance**
+(leads handled, conversion, open follow-ups, chats, handoffs taken, average
+first response on taken-over chats, revenue). First response is measured from
+when the customer started waiting — the handoff request or their first
+unanswered message — to that person's first reply.
 
 ---
 

@@ -304,3 +304,252 @@ class APITests(DashboardFixture):
         self.client.force_login(self.manager)
         self.assertContains(self.client.get(reverse("dashboard:overview")), reverse("dashboard:reports"))
 
+
+# --------------------------------------------------------------------------
+# Batch 4: report filters, CSV exports, funnel, employee & website analytics
+# --------------------------------------------------------------------------
+
+import csv  # noqa: E402
+import io  # noqa: E402
+
+from conversations.models import (  # noqa: E402
+    Conversation,
+    ConversationHandoff,
+    Message,
+    MessageSender,
+)
+from crm.models import LeadSource  # noqa: E402
+
+
+def read_csv(response):
+    return list(csv.DictReader(io.StringIO(response.content.decode())))
+
+
+class ReportFilterTests(DashboardFixture):
+    def setUp(self):
+        super().setUp()
+        self.other_site = Website.objects.create(
+            name="Other", domain="other.com", source_identifier="other"
+        )
+        self.booking = self.settle_a_booking()
+
+    def test_the_revenue_kpi_honours_the_website(self):
+        self.assertEqual(
+            selectors.overview_kpis(website=self.website)["revenue"], Decimal("21000.00")
+        )
+        self.assertEqual(selectors.overview_kpis(website=self.other_site)["revenue"], 0)
+
+    def test_an_explicit_date_range_wins_over_days(self):
+        old = self.make_lead()
+        Lead.objects.filter(pk=old.pk).update(created_at=timezone.now() - timedelta(days=200))
+        start = timezone.localdate() - timedelta(days=210)
+        end = timezone.localdate() - timedelta(days=190)
+        kpis = selectors.overview_kpis(days=7, start=start, end=end)
+        self.assertEqual(kpis["leads_total"], 1)
+        self.assertEqual(kpis["revenue"], 0)
+        self.assertEqual(selectors.period(7, None, None)[1], timezone.localdate())
+
+    def test_the_reports_page_applies_website_and_range(self):
+        self.client.force_login(self.manager)
+        response = self.client.get(
+            reverse("dashboard:reports"), {"website": self.other_site.pk, "days": "90"}
+        )
+        self.assertEqual(response.context["kpis"]["leads_total"], 0)
+        self.assertEqual(response.context["kpis"]["revenue"], 0)
+        # Export links carry the same filters.
+        self.assertContains(response, f"website={self.other_site.pk}")
+        response = self.client.get(reverse("dashboard:reports"), {"website": self.website.pk})
+        self.assertEqual(response.context["kpis"]["revenue"], Decimal("21000.00"))
+        self.assertTrue(response.context["funnel"])
+        self.assertContains(response, "By campaign")
+
+    def test_revenue_csv(self):
+        self.client.force_login(self.manager)
+        rows = read_csv(self.client.get(reverse("dashboard:report_export", args=["revenue"])))
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["Website"], "Main")
+        self.assertEqual(rows[0]["Product type"], "package")
+        self.assertEqual(rows[0]["Payments"], "1")
+        self.assertEqual(rows[0]["Amount"], "21000.00")
+        self.assertEqual(rows[0]["Date"], timezone.localdate().isoformat())
+        rows = read_csv(
+            self.client.get(
+                reverse("dashboard:report_export", args=["revenue"]),
+                {"website": self.other_site.pk},
+            )
+        )
+        self.assertEqual(rows, [])
+
+    def test_conversion_csv_has_the_funnel_by_website_source_and_campaign(self):
+        Lead.objects.filter(pk=self.booking.lead_id).update(
+            utm_source="google", utm_medium="cpc", utm_campaign="goa"
+        )
+        lost = self.make_lead(source=LeadSource.PHONE)
+        crm_services.change_status(lead=lost, status=LeadStatus.QUALIFIED, actor=self.agent)
+        crm_services.change_status(lead=lost, status=LeadStatus.LOST, actor=self.agent)
+        Conversation.objects.create(session_key="c1", website=self.website, utm_campaign="goa",
+                                    utm_source="google", utm_medium="cpc")
+        Conversation.objects.create(session_key="c2", website=self.website)
+
+        self.client.force_login(self.manager)
+        response = self.client.get(reverse("dashboard:report_export", args=["conversion"]))
+        rows = {
+            (row["Source"], row["utm_campaign"]): row for row in read_csv(response)
+        }
+        paid = rows[("AI Chat", "goa")]
+        self.assertEqual(paid["Website"], "Main")
+        self.assertEqual(paid["Chats"], "1")
+        # c1 never produced a lead of its own.
+        self.assertEqual(paid["Chats with a lead"], "0")
+        self.assertEqual(paid["Chat to lead %"], "0.0")
+        self.assertEqual(paid["Leads"], "1")
+        self.assertEqual(paid["Bookings"], "1")
+        self.assertEqual(paid["Paid bookings"], "1")
+        self.assertEqual(paid["Revenue"], "21000.00")
+        self.assertEqual(paid["Lead to paid %"], "100.0")
+        # Was qualified before it was lost: still counts as qualified.
+        phone = rows[("Phone", "")]
+        self.assertEqual(phone["Qualified"], "1")
+        self.assertEqual(phone["Chats"], "")
+        self.assertEqual(rows[("AI Chat", "")]["Chats"], "1")
+
+    def test_campaign_breakdown(self):
+        Lead.objects.filter(pk=self.booking.lead_id).update(
+            utm_source="google", utm_medium="cpc", utm_campaign="goa"
+        )
+        rows = selectors.conversion_funnel(group_by=("campaign",))
+        self.assertEqual(rows[0]["campaign"], "google / cpc / goa")
+        self.assertEqual(rows[0]["revenue"], Decimal("21000.00"))
+
+    def test_lead_and_booking_exports_honour_the_filters(self):
+        other = Lead(customer=self.customer, website=self.other_site, title="Elsewhere")
+        crm_services.create_lead(lead=other, actor=self.manager)
+        self.client.force_login(self.manager)
+        url = reverse("dashboard:report_export", args=["leads"])
+        titles = [row["Title"] for row in read_csv(self.client.get(url))]
+        self.assertIn("Elsewhere", titles)
+        titles = [
+            row["Title"]
+            for row in read_csv(self.client.get(url, {"website": self.website.pk}))
+        ]
+        self.assertNotIn("Elsewhere", titles)
+        self.assertIn("Goa trip", titles)
+
+        future = (timezone.localdate() + timedelta(days=5)).isoformat()
+        url = reverse("dashboard:report_export", args=["bookings"])
+        self.assertEqual(len(read_csv(self.client.get(url))), 1)
+        self.assertEqual(
+            read_csv(self.client.get(url, {"date_from": future, "date_to": future})), []
+        )
+        rows = read_csv(self.client.get(url, {"website": self.website.pk}))
+        self.assertEqual(rows[0]["Number"], self.booking.booking_number)
+
+    def test_exports_are_manager_only(self):
+        self.client.force_login(self.agent)
+        for kind in ("leads", "bookings", "revenue", "conversion"):
+            response = self.client.get(reverse("dashboard:report_export", args=[kind]))
+            self.assertRedirects(response, reverse("dashboard:overview"))
+        self.client.force_login(self.manager)
+        response = self.client.get(reverse("dashboard:report_export", args=["nope"]))
+        self.assertEqual(response.status_code, 404)
+
+    def test_the_reports_api_takes_the_same_filters(self):
+        self.client.force_login(self.manager)
+        body = self.client.get(
+            reverse("api_dashboard:reports"), {"website": self.other_site.pk}
+        ).json()["data"]
+        self.assertEqual(body["website"], self.other_site.pk)
+        self.assertEqual(body["kpis"]["revenue"], 0)
+        self.assertIn("campaigns", body)
+
+
+class AnalyticsTests(DashboardFixture):
+    def take_over_and_reply(self, wait, reply_after):
+        conversation = Conversation.objects.create(
+            session_key=f"s{Conversation.objects.count()}", website=self.website
+        )
+        conversation_services.post_message(
+            conversation=conversation, sender_type=MessageSender.CUSTOMER, content="Need help"
+        )
+        asked = Message.objects.filter(conversation=conversation).latest("created_at")
+        start = timezone.now() - timedelta(hours=1)
+        Message.objects.filter(pk=asked.pk).update(created_at=start)
+        handoff = conversation_services.take_over(conversation=conversation, user=self.agent)
+        ConversationHandoff.objects.filter(pk=handoff.pk).update(
+            created_at=start + timedelta(seconds=wait)
+        )
+        reply = conversation_services.agent_reply(
+            conversation=conversation, user=self.agent, text="Hi, I'm here"
+        )
+        Message.objects.filter(pk=reply.pk).update(
+            created_at=start + timedelta(seconds=wait + reply_after)
+        )
+        return conversation
+
+    def test_employee_rows_have_handoffs_response_time_and_chats(self):
+        self.take_over_and_reply(wait=60, reply_after=60)  # waited 120s
+        self.take_over_and_reply(wait=200, reply_after=40)  # waited 240s
+        # Taken over but never answered: not part of the average.
+        silent = Conversation.objects.create(session_key="silent", website=self.website)
+        conversation_services.take_over(conversation=silent, user=self.agent)
+
+        rows = {row["user"].username: row for row in selectors.employee_performance()}
+        agent = rows["agent"]
+        self.assertEqual(agent["handoffs"], 3)
+        self.assertEqual(agent["responded_handoffs"], 2)
+        self.assertEqual(agent["avg_first_response_seconds"], 180)
+        self.assertEqual(agent["conversations"], 3)
+        self.assertIsNone(rows["mgr"]["avg_first_response_seconds"])
+
+    def test_the_wait_starts_at_the_first_unanswered_message(self):
+        conversation = Conversation.objects.create(session_key="w", website=self.website)
+        base = timezone.now() - timedelta(hours=2)
+        for offset, sender in ((0, MessageSender.CUSTOMER), (10, MessageSender.AI),
+                               (500, MessageSender.CUSTOMER)):
+            message = conversation_services.post_message(
+                conversation=conversation, sender_type=sender, content="x"
+            )
+            Message.objects.filter(pk=message.pk).update(
+                created_at=base + timedelta(seconds=offset)
+            )
+        handoff = conversation_services.take_over(conversation=conversation, user=self.agent)
+        ConversationHandoff.objects.filter(pk=handoff.pk).update(
+            created_at=base + timedelta(seconds=600)
+        )
+        reply = conversation_services.agent_reply(
+            conversation=conversation, user=self.agent, text="Hello"
+        )
+        Message.objects.filter(pk=reply.pk).update(created_at=base + timedelta(seconds=620))
+        start, end = selectors.period(30)
+        times = selectors.first_response_seconds(self.agent, start=start, end=end)
+        self.assertEqual(times, [120.0])
+
+    def test_the_analytics_api_returns_every_employee_and_website_field(self):
+        self.take_over_and_reply(wait=30, reply_after=30)
+        self.make_lead(status=LeadStatus.CONVERTED)
+        self.settle_a_booking()
+        self.client.force_login(self.manager)
+        data = self.client.get(reverse("api_dashboard:analytics")).json()["data"]
+        agent = next(row for row in data["employees"] if row["username"] == "agent")
+        for field in (
+            "conversations", "handoffs", "responded_handoffs", "avg_first_response_seconds",
+            "conversion_rate", "revenue",
+        ):
+            self.assertIn(field, agent)
+        self.assertEqual(agent["conversations"], 1)
+        self.assertEqual(agent["handoffs"], 1)
+        self.assertEqual(agent["avg_first_response_seconds"], 60)
+        site = data["websites"][0]
+        self.assertEqual(site["conversations"], 1)
+        self.assertEqual(site["leads"], 2)
+        self.assertEqual(site["bookings"], 1)
+        self.assertEqual(site["paid_bookings"], 1)
+        self.assertEqual(Decimal(str(site["revenue"])), Decimal("21000.00"))
+        self.assertIn("avg_first_response_seconds", data["definitions"])
+
+    def test_the_analytics_page_renders_the_new_columns(self):
+        self.take_over_and_reply(wait=30, reply_after=95)
+        self.client.force_login(self.manager)
+        page = self.client.get(reverse("dashboard:analytics"))
+        self.assertContains(page, "Handoffs taken")
+        self.assertContains(page, "2m 5s")
