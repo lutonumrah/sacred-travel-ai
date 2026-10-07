@@ -520,3 +520,134 @@ class FollowUpReminderTests(LeadFixture):
         self.fire()
         self.assertTrue(self.reminders_for(self.agent).exists())
         self.assertEqual(mail.outbox, [])
+
+
+# --------------------------------------------------------------------------
+# Batch 4: pipeline board, website-form intake, archive, follow-up edit, teams
+# --------------------------------------------------------------------------
+
+from django.core.cache import cache  # noqa: E402
+from django.test import Client  # noqa: E402
+
+from accounts.models import AuditLog, Team  # noqa: E402
+from websites.services import issue_api_key  # noqa: E402
+
+from .models import LeadSource  # noqa: E402
+
+
+class IntakeFixture(LeadFixture):
+    def setUp(self):
+        super().setUp()
+        cache.clear()
+        self.key = issue_api_key(website=self.website)
+        self.url = reverse("api_crm:intake")
+
+    def submit(self, as_json=False, headers=None, **fields):
+        payload = {
+            "key": self.key.public_key,
+            "name": "Ravi Kumar",
+            "email": "ravi@example.com",
+            "phone": "+91 98100 22222",
+            "destination": "Manali",
+            "travel_start": "2027-05-01",
+            "travel_end": "2027-05-06",
+            "travellers": "3",
+            "budget": "60000",
+            "message": "Honeymoon, quiet hotel please.",
+        }
+        payload.update(fields)
+        payload = {key: value for key, value in payload.items() if value is not None}
+        if as_json:
+            return self.client.post(
+                self.url, payload, content_type="application/json", **(headers or {})
+            )
+        return self.client.post(self.url, payload, **(headers or {}))
+
+
+class IntakeTests(IntakeFixture):
+    def test_a_form_submission_creates_a_website_form_lead(self):
+        response = self.submit(utm_source="facebook", utm_campaign="summer")
+        self.assertEqual(response.status_code, 201)
+        body = response.json()
+        self.assertTrue(body["success"])
+        lead = Lead.objects.get()
+        self.assertEqual(body["lead_reference"], f"ENQ-{lead.pk:06d}")
+        # Nothing internal leaks back to the website.
+        self.assertEqual(set(body), {"success", "message", "lead_reference"})
+        self.assertEqual(lead.source, LeadSource.WEBSITE_FORM)
+        self.assertEqual(lead.website, self.website)
+        self.assertEqual(lead.destination, "Manali")
+        self.assertEqual(lead.travelers_count, 3)
+        self.assertEqual(lead.budget_max, Decimal("60000"))
+        self.assertEqual(lead.utm_source, "facebook")
+        self.assertEqual(lead.utm_campaign, "summer")
+        self.assertEqual(lead.customer.phone, "919810022222")
+        self.assertIn("Honeymoon", lead.notes.get().body)
+        # Destination, dates, party size and contact: qualified straight away.
+        self.assertEqual(lead.status, LeadStatus.QUALIFIED)
+        self.assertTrue(
+            Notification.objects.filter(
+                recipient=self.manager, notification_type="lead"
+            ).exists()
+        )
+
+    def test_json_is_accepted_and_the_reference_finds_the_lead(self):
+        response = self.submit(as_json=True, travellers=None, travelers=2)
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(Lead.objects.get().travelers_count, 2)
+        self.assertEqual(
+            list_leads(q=response.json()["lead_reference"]).get(), Lead.objects.get()
+        )
+
+    def test_an_existing_customer_is_reused(self):
+        response = self.submit(email="ANA@x.com", phone="")
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(Lead.objects.get().customer, self.customer)
+        self.assertEqual(Customer.objects.count(), 1)
+
+    def test_a_bad_or_revoked_key_is_refused(self):
+        self.assertEqual(self.submit(key="pk_nope").status_code, 403)
+        self.assertEqual(self.submit(key=None).status_code, 403)
+        self.key.is_active = False
+        self.key.save()
+        response = self.submit()
+        self.assertEqual(response.status_code, 403)
+        self.assertFalse(response.json()["success"])
+        self.assertFalse(Lead.objects.exists())
+
+    def test_contact_details_are_required(self):
+        response = self.submit(email="", phone="")
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(Lead.objects.exists())
+        self.assertEqual(self.submit(email="not-an-email", phone="").status_code, 400)
+
+    def test_cors_answers_only_the_keys_own_website(self):
+        response = self.submit(headers={"HTTP_ORIGIN": "https://www.main.com"})
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response["Access-Control-Allow-Origin"], "https://www.main.com")
+        other = self.submit(headers={"HTTP_ORIGIN": "https://evil.com"}, email="e@example.com")
+        self.assertNotIn("Access-Control-Allow-Origin", other)
+
+    def test_the_preflight_is_answered_for_registered_sites(self):
+        response = self.client.options(
+            self.url,
+            HTTP_ORIGIN="https://main.com",
+            HTTP_ACCESS_CONTROL_REQUEST_METHOD="POST",
+            HTTP_ACCESS_CONTROL_REQUEST_HEADERS="content-type",
+        )
+        self.assertEqual(response["Access-Control-Allow-Origin"], "https://main.com")
+
+    def test_the_form_works_with_the_chat_widget_switched_off(self):
+        self.website.widget_enabled = False
+        self.website.save()
+        self.assertEqual(self.submit().status_code, 201)
+
+    def test_the_staff_crm_api_still_has_no_cors(self):
+        response = self.client.get(reverse("api_crm:leads"), HTTP_ORIGIN="https://main.com")
+        self.assertNotIn("Access-Control-Allow-Origin", response)
+
+    @override_settings(PUBLIC_API_THROTTLE_RATES={"public_intake": "2/hour"})
+    def test_submissions_are_rate_limited(self):
+        codes = [self.submit(email=f"p{n}@example.com").status_code for n in range(3)]
+        self.assertEqual(codes, [201, 201, 429])
+        self.assertEqual(Lead.objects.count(), 2)

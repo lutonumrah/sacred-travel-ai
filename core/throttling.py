@@ -35,3 +35,7 @@ class WidgetBookThrottle(PublicRateThrottle):
 
 class PublicPayThrottle(PublicRateThrottle):
     scope = "public_pay"
+
+
+class PublicIntakeThrottle(PublicRateThrottle):
+    scope = "public_intake"

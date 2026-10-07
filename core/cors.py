@@ -1,4 +1,4 @@
-"""Cross-origin access for the embeddable widget and customer payment APIs.
+"""Cross-origin access for the embeddable widget, website enquiry form and payment APIs.
 
 django-cors-headers only ever answers for paths matching CORS_URLS_REGEX;
 the staff API never gets CORS headers. Inside that, an Origin is allowed when
@@ -8,6 +8,8 @@ it belongs to a registered website:
   ANY active website with the widget switched on.
 * The real request: the view records which website the key (or payment token)
   belongs to on `request.cors_website`, and the Origin must match THAT site.
+  The enquiry-form snippet posts FormData, a "simple" request with no
+  preflight, so it works even on a site whose chat widget is switched off.
   If the view never got that far (bad key, throttled) we fall back to the
   preflight rule so the browser can still read the error.
 

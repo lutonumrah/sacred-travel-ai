@@ -105,6 +105,7 @@ class WebsiteDetailView(PageMixin, DetailView):
         active_key = website.api_keys.filter(is_active=True).first()
         ctx["active_key"] = active_key
         ctx["embed_snippet"] = _embed_snippet(self.request, website, active_key)
+        ctx["intake_snippet"] = _intake_snippet(self.request, active_key)
         return ctx
 
 
@@ -121,6 +122,53 @@ def _embed_snippet(request, website, api_key):
         f'  data-scared-title="{website.brand_name or website.name}"\n'
         '  defer></script>'
     )
+
+
+def _intake_snippet(request, api_key):
+    """A plain HTML enquiry form posting to the intake API, for the site's developer."""
+    if not api_key:
+        return "Issue an API key to generate the enquiry form snippet."
+    base = request.build_absolute_uri("/").rstrip("/")
+    return f"""<form id="enquiry-form">
+  <input name="name" placeholder="Your name" required>
+  <input name="email" type="email" placeholder="Email">
+  <input name="phone" type="tel" placeholder="Phone">
+  <input name="destination" placeholder="Where would you like to go?">
+  <input name="travel_start" type="date"> <input name="travel_end" type="date">
+  <input name="travellers" type="number" min="1" max="50" placeholder="Travellers">
+  <input name="budget" type="number" min="0" placeholder="Budget (INR)">
+  <textarea name="message" placeholder="Tell us about your trip"></textarea>
+  <button type="submit">Send enquiry</button>
+  <p id="enquiry-result" role="status"></p>
+</form>
+<script>
+(function () {{
+  var form = document.getElementById("enquiry-form");
+  var result = document.getElementById("enquiry-result");
+  form.addEventListener("submit", function (event) {{
+    event.preventDefault();
+    var data = new FormData(form);
+    data.append("key", "{api_key.public_key}");
+    // Which campaign brought the visitor: UTM tags, referring page, this page.
+    var params = new URLSearchParams(location.search);
+    ["utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content"].forEach(function (name) {{
+      if (params.get(name)) data.append(name, params.get(name));
+    }});
+    if (document.referrer) data.append("referrer", document.referrer);
+    data.append("landing_page", location.href);
+    // FormData keeps this a simple request: no CORS preflight needed.
+    fetch("{base}/api/v1/crm/intake/", {{ method: "POST", body: data }})
+      .then(function (response) {{ return response.json(); }})
+      .then(function (body) {{
+        result.textContent = body.success
+          ? "Thank you! Your reference is " + body.lead_reference + "."
+          : (body.message || "Please check the details and try again.");
+        if (body.success) form.reset();
+      }})
+      .catch(function () {{ result.textContent = "Could not send. Please try again."; }});
+  }});
+}})();
+</script>"""
 
 
 class WebsiteKeyCreateView(ManagerRequiredMixin, View):

@@ -28,6 +28,16 @@
       </div>
 
       <div class="panel">
+        <div class="panel-head"><h2>Website enquiry form</h2></div>
+        <p class="muted small">Paste this where the enquiry form should appear on {{ website.domain }}, then style it to match the site.
+          Each submission becomes a <strong>Website Form</strong> lead for {{ website.name }}, matched to an existing customer by email or phone,
+          with any UTM campaign tags recorded. Visitors see only a reference such as <span class="mono">ENQ-000123</span>.</p>
+        <div class="code-block">{{ intake_snippet }}</div>
+        <p class="muted small">Endpoint: <span class="mono">POST /api/v1/crm/intake/</span> — fields <span class="mono">key, name, email, phone, message, destination, travel_start, travel_end, travellers, budget</span>
+          and optionally <span class="mono">utm_source, utm_medium, utm_campaign, utm_term, utm_content, referrer, landing_page</span>. Email or phone is required.</p>
+      </div>
+
+      <div class="panel">
         <div class="panel-head">
           <h2>API keys</h2>
           <form method="post" action="{% url 'websites:key_create' website.pk %}" class="inline-form">

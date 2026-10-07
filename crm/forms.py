@@ -149,3 +149,65 @@ class FollowUpTaskForm(StyledModelForm):
         if due and reminder and reminder > due:
             self.add_error("reminder_at", "The reminder must fire on or before the due date.")
         return cleaned
+
+
+class WebsiteIntakeForm(forms.Form):
+    """The public website enquiry form (`POST /api/v1/crm/intake/`)."""
+
+    key = forms.CharField(max_length=64)
+    name = forms.CharField(max_length=100)
+    email = forms.EmailField(required=False)
+    phone = forms.CharField(max_length=20, required=False)
+    message = forms.CharField(max_length=2000, required=False)
+    destination = forms.CharField(max_length=150, required=False)
+    travel_start = forms.DateField(required=False)
+    travel_end = forms.DateField(required=False)
+    travellers = forms.IntegerField(min_value=1, max_value=50, required=False)
+    budget = forms.DecimalField(min_value=0, max_digits=12, decimal_places=2, required=False)
+
+    def __init__(self, data=None, *args, **kwargs):
+        # Accept the American spelling too; host sites name fields their own way.
+        if data is not None and not data.get("travellers") and data.get("travelers"):
+            data = data.copy()
+            data["travellers"] = data.get("travelers")
+        super().__init__(data, *args, **kwargs)
+
+    def clean_phone(self):
+        phone = self.cleaned_data.get("phone", "").strip()
+        if not phone:
+            return ""
+        digits = "".join(ch for ch in phone if ch.isdigit())
+        if not 10 <= len(digits) <= 13:
+            raise forms.ValidationError("Enter a valid phone number.")
+        return digits
+
+    def clean(self):
+        data = super().clean()
+        if not data.get("email") and not data.get("phone") and not self.has_error("phone"):
+            raise forms.ValidationError("Please give an email address or a phone number.")
+        start, end = data.get("travel_start"), data.get("travel_end")
+        if start and end and end < start:
+            self.add_error("travel_end", "The return date cannot be before the departure date.")
+        return data
+
+
+class FollowUpEditForm(StyledModelForm):
+    """Edit an existing follow-up; the lead it belongs to does not change."""
+
+    class Meta:
+        model = FollowUpTask
+        fields = ("title", "assigned_to", "due_at", "reminder_at", "notes")
+        widgets = {"due_at": DateTimeInput(), "reminder_at": DateTimeInput()}
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        from accounts.selectors import assignable_users
+
+        self.fields["assigned_to"].queryset = assignable_users()
+
+    def clean(self):
+        cleaned = super().clean()
+        due, reminder = cleaned.get("due_at"), cleaned.get("reminder_at")
+        if due and reminder and reminder > due:
+            self.add_error("reminder_at", "The reminder must fire on or before the due date.")
+        return cleaned

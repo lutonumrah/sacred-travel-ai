@@ -23,6 +23,7 @@
           <dt>Travellers</dt><dd>{{ lead.travelers_count }}</dd>
           <dt>Budget</dt><dd>{% if lead.budget_max %}{{ lead.budget_min|default:"0" }} – {{ lead.budget_max }}{% else %}—{% endif %}</dd>
           <dt>Source</dt><dd>{{ lead.get_source_display }}{% if lead.website %} · {{ lead.website.source_identifier }}{% endif %}</dd>
+          <dt>Reference</dt><dd class="mono">{{ lead.reference }}</dd>
           <dt>Score</dt><dd><strong>{{ lead.score }}</strong> / 100</dd>
           {% if lead.lost_reason %}<dt>Lost because</dt><dd>{{ lead.lost_reason }}</dd>{% endif %}
           {% for label, value in preference_rows %}<dt>{{ label }}</dt><dd>{{ value }}</dd>{% endfor %}

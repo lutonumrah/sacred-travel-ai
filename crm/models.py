@@ -110,6 +110,11 @@ class Lead(TimeStampedModel, SoftDeleteModel, AttributionFields):
     def __str__(self):
         return f"{self.title} [{self.status}]"
 
+    @property
+    def reference(self):
+        """What the customer is told after the website form, and staff can search for."""
+        return f"ENQ-{self.pk:06d}" if self.pk else ""
+
 
 class LeadNote(TimeStampedModel):
     lead = models.ForeignKey(Lead, on_delete=models.CASCADE, related_name="notes")

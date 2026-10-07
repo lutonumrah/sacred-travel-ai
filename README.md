@@ -61,6 +61,20 @@ sends CORS headers. On phones the open chat goes full screen, the chat survives
 a page reload, and the widget polls while a consultant is involved or a
 payment is outstanding.
 
+**Website enquiry forms.** A site's own contact form can post to
+`POST /api/v1/crm/intake/` with the same public key (the website page shows a
+ready-made HTML form and `fetch` snippet). Each submission becomes a
+**Website Form** lead for that site, reuses the customer if the email or phone
+is known, alerts the managers and answers only with a reference such as
+`ENQ-000123` (searchable on the leads page). Rate limited per IP.
+
+**Source attribution.** The widget sends the page's UTM tags
+(`utm_source/medium/campaign/term/content`), `document.referrer` and the page
+URL with the first message; the enquiry form snippet does the same. They are
+validated, stored on the conversation (first touch wins), copied to the lead
+and on to any booking, shown on the lead and booking pages, and reported by
+campaign.
+
 ### 2. The AI answers, and quietly builds a lead
 
 `POST /api/v1/conversations/widget/chat/` is public, authenticated by the
@@ -270,6 +284,7 @@ POST /api/v1/conversations/{id}/handoff/       {"action": "take_over|resume_ai|c
 POST /api/v1/conversations/widget/chat/        public — widget key
 GET  /api/v1/conversations/widget/history/     public — key + session; ?since=<id> to poll
 POST /api/v1/conversations/widget/book/        public — "Book this" on a card
+POST /api/v1/crm/intake/                       public — website enquiry form, widget key
 POST /api/v1/pay/{token}/order/ · verify/ · simulate/   public — payment link token
 GET  /api/v1/bookings/ · /bookings/{id}/
 POST /api/v1/bookings/payments/create/         {"booking_id": 1}
@@ -294,7 +309,7 @@ All settings come from `.env` (see `.env.example`).
 | `RAZORPAY_WEBHOOK_SECRET` | Simulation mode: webhooks verified against the simulation secret. With live keys: every webhook is rejected |
 | `BOOKING_TAX_PERCENT` | Defaults to 5 |
 | `PAYMENT_LINK_TTL_DAYS` | Customer payment links last 7 days |
-| `THROTTLE_WIDGET_CHAT` / `_POLL` / `_BOOK`, `THROTTLE_PUBLIC_PAY` | Per-IP limits: `30/minute`, `120/minute`, `20/hour`, `60/hour` |
+| `THROTTLE_WIDGET_CHAT` / `_POLL` / `_BOOK`, `THROTTLE_PUBLIC_PAY`, `THROTTLE_PUBLIC_INTAKE` | Per-IP limits: `30/minute`, `120/minute`, `20/hour`, `60/hour`, `20/hour` |
 | `NUM_PROXIES` | `1` (nginx in front). Set `0` when nothing sits in front of gunicorn, or clients could dodge rate limits with a forged `X-Forwarded-For` |
 | `DATABASE_URL` | SQLite; set a `postgres://` URL for Postgres |
 | `SITE_URL` | Base of links in emails; defaults to `http://localhost:8000` — set it in production |

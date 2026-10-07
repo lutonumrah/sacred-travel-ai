@@ -164,6 +164,8 @@ PUBLIC_API_THROTTLE_RATES = {
     "widget_poll": os.getenv("THROTTLE_WIDGET_POLL", "120/minute"),
     "widget_book": os.getenv("THROTTLE_WIDGET_BOOK", "20/hour"),
     "public_pay": os.getenv("THROTTLE_PUBLIC_PAY", "60/hour"),
+    # Website enquiry forms posting to /api/v1/crm/intake/.
+    "public_intake": os.getenv("THROTTLE_PUBLIC_INTAKE", "20/hour"),
 }
 
 # --- CORS -----------------------------------------------------------------
@@ -171,7 +173,7 @@ PUBLIC_API_THROTTLE_RATES = {
 # for origins on a registered website's domain (see core/cors.py). The staff
 # API and dashboard never send CORS headers.
 CORS_ALLOW_ALL_ORIGINS = False
-CORS_URLS_REGEX = r"^/api/v1/(conversations/widget|pay)/"
+CORS_URLS_REGEX = r"^/api/v1/(conversations/widget|pay|crm/intake)/"
 
 # --- Behind a TLS-terminating proxy (nginx) ------------------------------
 # CSRF_TRUSTED_ORIGINS must list the full scheme+host the dashboard is served

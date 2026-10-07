@@ -1,3 +1,5 @@
+import re
+
 from django.db.models import Count, Q
 from django.utils import timezone
 
@@ -12,6 +14,10 @@ PIPELINE_ORDER = [
     LeadStatus.FOLLOW_UP,
     LeadStatus.LOST,
 ]
+
+
+# `ENQ-000123`, the reference a website-form visitor is given (Lead.reference).
+REFERENCE_RE = re.compile(r"ENQ-0*(\d{1,10})", re.I)
 
 
 # Travel preferences the chat extracts, in display order.
@@ -119,14 +125,18 @@ def list_leads(
         visible_leads(user) if user is not None else Lead.objects.filter(is_deleted=False)
     ).select_related("customer", "website", "assigned_to", "assigned_team")
     if q:
-        queryset = queryset.filter(
-            Q(title__icontains=q)
-            | Q(destination__icontains=q)
-            | Q(customer__first_name__icontains=q)
-            | Q(customer__last_name__icontains=q)
-            | Q(customer__email__icontains=q)
-            | Q(customer__phone__icontains=q)
-        )
+        reference = REFERENCE_RE.fullmatch(q.strip())
+        if reference:
+            queryset = queryset.filter(pk=int(reference.group(1)))
+        else:
+            queryset = queryset.filter(
+                Q(title__icontains=q)
+                | Q(destination__icontains=q)
+                | Q(customer__first_name__icontains=q)
+                | Q(customer__last_name__icontains=q)
+                | Q(customer__email__icontains=q)
+                | Q(customer__phone__icontains=q)
+            )
     if status:
         queryset = queryset.filter(status=status)
     if source:

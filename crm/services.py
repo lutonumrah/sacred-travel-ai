@@ -3,10 +3,11 @@ from django.db.models import Q
 from django.urls import reverse
 from django.utils import timezone
 
+from core.attribution import apply_attribution
 from core.notifications import notify, notify_managers, notify_many
 from core.services import log_audit
 
-from .models import Customer, FollowUpTask, Lead, LeadActivity, LeadNote, LeadStatus
+from .models import Customer, FollowUpTask, Lead, LeadActivity, LeadNote, LeadSource, LeadStatus
 
 # Statuses that mean the lead is no longer being actively worked.
 CLOSED_STATUSES = {LeadStatus.CONVERTED, LeadStatus.LOST}
@@ -397,3 +398,72 @@ def get_or_create_customer(*, first_name, last_name="", email="", phone="", **ex
         **extra,
     )
     return customer, True
+
+
+@transaction.atomic
+def create_lead_from_form(
+    *,
+    website,
+    name,
+    email="",
+    phone="",
+    message="",
+    destination="",
+    travel_start=None,
+    travel_end=None,
+    travelers=None,
+    budget=None,
+    attribution=None,
+    request=None,
+):
+    """A visitor submitted a website's enquiry form: customer, lead, note, alerts."""
+    first_name, _, last_name = name.strip().partition(" ")
+    customer, _created = get_or_create_customer(
+        first_name=first_name[:100] or "Website visitor",
+        last_name=last_name.strip()[:100],
+        email=email,
+        phone=phone,
+    )
+    lead = Lead(
+        customer=customer,
+        website=website,
+        title=(f"{destination} enquiry" if destination else f"{website.name} website enquiry")[
+            :200
+        ],
+        source=LeadSource.WEBSITE_FORM,
+        destination=destination,
+        travel_start=travel_start,
+        travel_end=travel_end,
+        travelers_count=travelers or 1,
+        budget_max=budget or None,
+    )
+    apply_attribution(lead, attribution or {})
+    create_lead(
+        lead=lead,
+        request=request,
+        activity_summary=f"Lead submitted through the {website.name} website form",
+    )
+    if message:
+        add_note(lead=lead, body=f"Message from the website form:\n{message}")
+    # Only an explicit party size counts towards qualification, as in chat.
+    qualify_if_ready(
+        lead=lead, requirements={"travelers": travelers} if travelers else {}, request=request
+    )
+    return lead
+
+
+def archive_customer(*, customer, actor=None, request=None):
+    """Soft delete: hidden from lists and pickers, history kept, restorable."""
+    customer.is_deleted = True
+    customer.deleted_at = timezone.now()
+    customer.save(update_fields=["is_deleted", "deleted_at", "updated_at"])
+    log_audit(actor=actor, action="customer.archive", entity=customer, request=request)
+    return customer
+
+
+def restore_customer(*, customer, actor=None, request=None):
+    customer.is_deleted = False
+    customer.deleted_at = None
+    customer.save(update_fields=["is_deleted", "deleted_at", "updated_at"])
+    log_audit(actor=actor, action="customer.restore", entity=customer, request=request)
+    return customer
