@@ -487,8 +487,10 @@ def compose_rule_reply(message, requirements, recommendations, brand):
         )
 
     return (
+        # No handoff happens here, so do not promise one: tell the customer how to ask.
         "I could not find a match in our current inventory for that. "
-        "Let me put you through to one of our travel consultants, who can look at more options."
+        "If you'd like one of our travel consultants to look at more options, just type "
+        "\"talk to an agent\" and I will bring one in."
     )
 
 
