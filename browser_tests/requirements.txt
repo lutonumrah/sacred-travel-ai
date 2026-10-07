@@ -1,0 +1,5 @@
+# Installed inside mcr.microsoft.com/playwright/python:v1.63.0-noble by run.sh.
+# Keep `playwright` pinned to the image tag so the bundled browsers match.
+playwright==1.63.0
+pytest==9.1.1
+pytest-playwright==0.9.0

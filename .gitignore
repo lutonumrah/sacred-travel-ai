@@ -17,3 +17,6 @@ staticfiles/
 dist/
 build/
 .DS_Store
+
+# Browser smoke suite output (browser_tests/run.sh)
+browser_tests/artifacts/
