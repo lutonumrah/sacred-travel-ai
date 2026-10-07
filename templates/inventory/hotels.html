@@ -20,15 +20,8 @@
               <td class="right">{{ hotel.currency }} {{ hotel.base_price|floatformat:0 }}</td>
               <td class="right" title="Cheapest active offer valid tonight, else the base price">{{ hotel.nightly_price|floatformat:0 }}</td>
               <td class="right">{{ hotel.offers.count }}</td>
-              <td>{% if hotel.is_active %}<span class="badge ok">Active</span>{% else %}<span class="badge grey">Inactive</span>{% endif %}</td>
-              <td class="actions">
-                {% if can_edit %}
-                  <a class="btn small ghost" href="{% url 'inventory:hotel_edit' hotel.pk %}">Edit</a>
-                  <form method="post" action="{% url 'inventory:toggle' 'hotel' hotel.pk %}" class="inline-form">
-                    {% csrf_token %}<button class="btn small ghost" type="submit">{% if hotel.is_active %}Disable{% else %}Enable{% endif %}</button>
-                  </form>
-                {% endif %}
-              </td>
+              <td>{% include "inventory/_status_badge.html" with obj=hotel %}</td>
+              <td class="actions">{% include "inventory/_row_actions.html" with obj=hotel kind="hotel" edit_url="inventory:hotel_edit" %}</td>
             </tr>
           {% empty %}
             <tr><td colspan="8">{% include "partials/_empty.html" with title="No hotels match" hint="Add hotels so the AI has something to recommend." %}</td></tr>

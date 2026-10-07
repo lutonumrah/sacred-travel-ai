@@ -19,15 +19,8 @@
               <td>{{ car.destination.name|default:"—" }}</td>
               <td>{{ car.seats }}</td>
               <td class="right">{{ car.currency }} {{ car.daily_price|floatformat:0 }}</td>
-              <td>{% if car.is_active %}<span class="badge ok">Active</span>{% else %}<span class="badge grey">Inactive</span>{% endif %}</td>
-              <td class="actions">
-                {% if can_edit %}
-                  <a class="btn small ghost" href="{% url 'inventory:car_edit' car.pk %}">Edit</a>
-                  <form method="post" action="{% url 'inventory:toggle' 'car' car.pk %}" class="inline-form">
-                    {% csrf_token %}<button class="btn small ghost" type="submit">{% if car.is_active %}Disable{% else %}Enable{% endif %}</button>
-                  </form>
-                {% endif %}
-              </td>
+              <td>{% include "inventory/_status_badge.html" with obj=car %}</td>
+              <td class="actions">{% include "inventory/_row_actions.html" with obj=car kind="car" edit_url="inventory:car_edit" %}</td>
             </tr>
           {% empty %}
             <tr><td colspan="7">{% include "partials/_empty.html" with title="No vehicles match" %}</td></tr>

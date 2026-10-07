@@ -10,7 +10,7 @@ class InventoryType(models.TextChoices):
     PACKAGE = "package", "Tour Package"
 
 
-class Destination(TimeStampedModel):
+class Destination(TimeStampedModel, SoftDeleteModel):
     """Master destination list shared across inventory."""
 
     name = models.CharField(max_length=150)

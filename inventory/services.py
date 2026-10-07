@@ -16,19 +16,92 @@ def record_inventory_saved(*, obj, actor=None, request=None, created=False, kind
     return obj
 
 
-def soft_delete(*, obj, actor=None, request=None, kind="item"):
+class InventoryError(Exception):
+    """An archive / restore / delete that is refused; the message is shown to staff."""
+
+
+def archive(*, obj, actor=None, request=None, kind="item"):
+    """Soft delete: inactive and out of lists, search, the AI and new bookings."""
+    from .selectors import items_using_destination
+
+    if kind == "destination":
+        in_use = sum(
+            queryset.count()
+            for queryset in items_using_destination(obj, include_archived=False).values()
+        )
+        if in_use:
+            raise InventoryError(
+                f"{obj.name} is used by {in_use} hotel, car or package"
+                f"{'s' if in_use > 1 else ''}. Archive or move them first."
+            )
     obj.is_deleted = True
     obj.deleted_at = timezone.now()
     obj.is_active = False
     obj.save(update_fields=["is_deleted", "deleted_at", "is_active", "updated_at"])
     log_audit(
         actor=actor,
-        action=f"inventory.{kind}.delete",
+        action=f"inventory.{kind}.archive",
         entity=obj,
         metadata={"name": obj.name},
         request=request,
     )
     return obj
+
+
+# Kept for callers that predate archive/restore.
+soft_delete = archive
+
+
+def restore(*, obj, actor=None, request=None, kind="item"):
+    """Bring an archived item back, still inactive until someone enables it."""
+    obj.is_deleted = False
+    obj.deleted_at = None
+    obj.save(update_fields=["is_deleted", "deleted_at", "updated_at"])
+    log_audit(
+        actor=actor,
+        action=f"inventory.{kind}.restore",
+        entity=obj,
+        metadata={"name": obj.name},
+        request=request,
+    )
+    return obj
+
+
+def delete_permanently(*, obj, actor=None, request=None, kind="item"):
+    """Hard delete an archived item nothing refers to.
+
+    Bookings point at inventory by type + id, so deleting a booked item would
+    orphan its history: that is refused, and the item can only stay archived.
+    """
+    from .selectors import bookings_for, items_using_destination
+
+    if not obj.is_deleted:
+        raise InventoryError(f"Archive {obj.name} before deleting it permanently.")
+    booked = bookings_for(kind, obj).count()
+    if booked:
+        raise InventoryError(
+            f"{obj.name} has {booked} booking{'s' if booked > 1 else ''} and cannot be "
+            "deleted. It stays archived, hidden from search and the AI."
+        )
+    if kind == "destination":
+        used = sum(queryset.count() for queryset in items_using_destination(obj).values())
+        if used:
+            raise InventoryError(
+                f"{obj.name} is still set on {used} hotel, car or package"
+                f"{'s' if used > 1 else ''} (archived ones included) and cannot be deleted."
+            )
+    name, pk = obj.name, obj.pk
+    log_audit(
+        actor=actor,
+        action=f"inventory.{kind}.delete",
+        entity=obj,
+        metadata={"name": name},
+        request=request,
+    )
+    if kind != "destination":
+        InventoryWebsiteVisibility.objects.filter(inventory_type=kind, object_id=pk).delete()
+    obj.delete()
+    return name
 
 
 def toggle_active(*, obj, actor=None, request=None, kind="item"):

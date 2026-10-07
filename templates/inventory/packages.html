@@ -18,15 +18,8 @@
               <td>{{ package.destination.name|default:"—" }}</td>
               <td>{{ package.duration_days }}D / {{ package.duration_nights }}N</td>
               <td class="right">{{ package.currency }} {{ package.base_price|floatformat:0 }}</td>
-              <td>{% if package.is_active %}<span class="badge ok">Active</span>{% else %}<span class="badge grey">Inactive</span>{% endif %}</td>
-              <td class="actions">
-                {% if can_edit %}
-                  <a class="btn small ghost" href="{% url 'inventory:package_edit' package.pk %}">Edit</a>
-                  <form method="post" action="{% url 'inventory:toggle' 'package' package.pk %}" class="inline-form">
-                    {% csrf_token %}<button class="btn small ghost" type="submit">{% if package.is_active %}Disable{% else %}Enable{% endif %}</button>
-                  </form>
-                {% endif %}
-              </td>
+              <td>{% include "inventory/_status_badge.html" with obj=package %}</td>
+              <td class="actions">{% include "inventory/_row_actions.html" with obj=package kind="package" edit_url="inventory:package_edit" %}</td>
             </tr>
           {% empty %}
             <tr><td colspan="6">{% include "partials/_empty.html" with title="No packages match" %}</td></tr>

@@ -1,4 +1,5 @@
 from django import forms
+from django.db.models import Q
 
 from core.forms import StyledFormMixin, StyledModelForm, TimeInput
 
@@ -28,13 +29,24 @@ class CommaSeparatedJSONField(forms.CharField):
         return [part.strip() for part in (value or "").split(",") if part.strip()]
 
 
+class _DestinationPickerMixin:
+    """Archived destinations can't be picked, except the one already set."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        current = getattr(self.instance, "destination_id", None)
+        self.fields["destination"].queryset = Destination.objects.filter(
+            Q(is_deleted=False) | Q(pk=current)
+        )
+
+
 class DestinationForm(StyledModelForm):
     class Meta:
         model = Destination
         fields = ("name", "code", "city", "state", "country", "is_active")
 
 
-class HotelForm(StyledModelForm):
+class HotelForm(_DestinationPickerMixin, StyledModelForm):
     amenities = CommaSeparatedJSONField(
         required=False,
         help_text="Comma separated, e.g. Wi-Fi, Pool, Breakfast",
@@ -81,7 +93,7 @@ class HotelOfferForm(StyledModelForm):
         }
 
 
-class CarRentalForm(StyledModelForm):
+class CarRentalForm(_DestinationPickerMixin, StyledModelForm):
     class Meta:
         model = CarRental
         fields = (
@@ -101,7 +113,7 @@ class CarRentalForm(StyledModelForm):
         )
 
 
-class TourPackageForm(StyledModelForm):
+class TourPackageForm(_DestinationPickerMixin, StyledModelForm):
     itinerary_text = forms.CharField(
         required=False,
         widget=forms.Textarea(attrs={"rows": 6}),
@@ -151,14 +163,22 @@ class TourPackageForm(StyledModelForm):
 class InventoryFilterForm(StyledFormMixin, forms.Form):
     q = forms.CharField(required=False, label="Search")
     destination = forms.ModelChoiceField(
-        required=False, queryset=Destination.objects.filter(is_active=True), empty_label="All destinations"
+        required=False,
+        queryset=Destination.objects.filter(is_active=True, is_deleted=False),
+        empty_label="All destinations",
     )
     status = forms.ChoiceField(
         required=False,
-        choices=[("", "Any status"), ("active", "Active"), ("inactive", "Inactive")],
+        choices=[
+            ("", "Any status"),
+            ("active", "Active"),
+            ("inactive", "Inactive"),
+            ("archived", "Archived only"),
+        ],
     )
     min_price = forms.DecimalField(required=False, label="Min price")
     max_price = forms.DecimalField(required=False, label="Max price")
+    archived = forms.BooleanField(required=False, label="Include archived")
 
 
 class InventorySearchForm(StyledFormMixin, forms.Form):

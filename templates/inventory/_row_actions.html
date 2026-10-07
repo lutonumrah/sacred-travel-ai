@@ -1,0 +1,23 @@
+{% comment %}Row buttons for an inventory item. Context: obj, kind, edit_url (URL name), can_edit.{% endcomment %}
+{% if can_edit %}
+  {% if obj.is_deleted %}
+    <form method="post" action="{% url 'inventory:restore' kind obj.pk %}" class="inline-form">
+      {% csrf_token %}<button class="btn small ghost" type="submit">Restore</button>
+    </form>
+    <form method="post" action="{% url 'inventory:delete' kind obj.pk %}" class="inline-form"
+          onsubmit="return confirm('Delete {{ obj.name|escapejs }} permanently? This cannot be undone.')">
+      {% csrf_token %}<button class="btn small danger" type="submit">Delete permanently</button>
+    </form>
+  {% else %}
+    <a class="btn small ghost" href="{% url edit_url obj.pk %}">Edit</a>
+    {% if kind != 'destination' %}
+      <form method="post" action="{% url 'inventory:toggle' kind obj.pk %}" class="inline-form">
+        {% csrf_token %}<button class="btn small ghost" type="submit">{% if obj.is_active %}Disable{% else %}Enable{% endif %}</button>
+      </form>
+    {% endif %}
+    <form method="post" action="{% url 'inventory:archive' kind obj.pk %}" class="inline-form"
+          onsubmit="return confirm('Archive {{ obj.name|escapejs }}? It disappears from lists, search and the AI until restored.')">
+      {% csrf_token %}<button class="btn small ghost" type="submit">Archive</button>
+    </form>
+  {% endif %}
+{% endif %}

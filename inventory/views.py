@@ -1,6 +1,6 @@
 from django.contrib import messages
 from django.shortcuts import get_object_or_404, redirect
-from django.urls import reverse_lazy
+from django.urls import reverse, reverse_lazy
 from django.utils.http import url_has_allowed_host_and_scheme
 from django.views import View
 from django.views.generic import CreateView, DeleteView, DetailView, TemplateView, UpdateView
@@ -40,6 +40,7 @@ class _FilteredListView(PageMixin, TemplateView):
             status=data.get("status", "") or "",
             min_price=data.get("min_price"),
             max_price=data.get("max_price"),
+            include_archived=bool(data.get("archived")),
         )
         ctx["filter_form"] = form
         ctx["page_obj"] = paginate(queryset, self.request.GET.get("page"))
@@ -53,6 +54,7 @@ _LIST_ROUTE = {
     "hotel": "inventory:hotels",
     "car": "inventory:cars",
     "package": "inventory:packages",
+    "destination": "inventory:destinations",
 }
 
 
@@ -68,11 +70,15 @@ class DestinationListView(PageMixin, TemplateView):
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
+        include_archived = self.request.GET.get("archived") == "on"
         queryset = selectors.list_destinations(
-            q=self.request.GET.get("q", ""), status=self.request.GET.get("status", "")
+            q=self.request.GET.get("q", ""),
+            status=self.request.GET.get("status", ""),
+            include_archived=include_archived,
         )
         ctx["page_obj"] = paginate(queryset, self.request.GET.get("page"))
         ctx["q"] = self.request.GET.get("q", "")
+        ctx["include_archived"] = include_archived
         ctx["can_edit"] = _can_edit(self.request.user)
         return ctx
 
@@ -95,6 +101,9 @@ class DestinationUpdateView(InventoryEditorMixin, UpdateView):
     page_title = "Edit Destination"
     page_subtitle = "Update destination details."
     active_nav = "inventory"
+
+    def get_queryset(self):
+        return Destination.objects.filter(is_deleted=False)
 
 
 class HotelListView(_FilteredListView):
@@ -263,17 +272,49 @@ class PackageUpdateView(_InventorySaveMixin, UpdateView):
         return TourPackage.objects.filter(is_deleted=False)
 
 
-class InventoryDeleteView(InventoryEditorMixin, View):
-    """Soft-deletes any of the three inventory kinds."""
+def _back_to_list(kind, *, archived=False):
+    url = reverse(_LIST_ROUTE.get(kind, "inventory:hotels"))
+    return redirect(f"{url}?archived=on" if archived else url)
+
+
+class _InventoryLifecycleView(InventoryEditorMixin, View):
+    """POST-only archive / restore / delete for hotels, cars, packages and destinations."""
+
+    action = None
+    done = ""
+    # Which list to land on afterwards: the archived view, or the normal one.
+    show_archived = False
 
     def post(self, request, kind, pk):
-        obj = selectors.get_inventory_object(kind, pk)
+        obj = selectors.get_managed_object(kind, pk)
         if obj is None:
             messages.error(request, "That item no longer exists.")
-        else:
-            services.soft_delete(obj=obj, actor=request.user, request=request, kind=kind)
-            messages.success(request, f"{obj.name} archived.")
-        return redirect(_LIST_ROUTE.get(kind, "inventory:hotels"))
+            return _back_to_list(kind)
+        try:
+            type(self).action(obj=obj, actor=request.user, request=request, kind=kind)
+        except services.InventoryError as exc:
+            messages.error(request, str(exc))
+            return _back_to_list(kind, archived=obj.is_deleted)
+        messages.success(request, f"{obj.name} {self.done}")
+        return _back_to_list(kind, archived=self.show_archived)
+
+
+class InventoryArchiveView(_InventoryLifecycleView):
+    action = staticmethod(services.archive)
+    done = "archived. It is hidden from lists, search and the AI; restore it any time."
+
+
+class InventoryRestoreView(_InventoryLifecycleView):
+    action = staticmethod(services.restore)
+    done = "restored. It is inactive until you enable it."
+
+
+class InventoryDeleteView(_InventoryLifecycleView):
+    """Hard delete, only for archived items with no bookings."""
+
+    action = staticmethod(services.delete_permanently)
+    done = "deleted permanently."
+    show_archived = True
 
 
 class InventoryToggleView(InventoryEditorMixin, View):

@@ -23,6 +23,9 @@ MODEL_BY_TYPE = {
     InventoryType.PACKAGE: TourPackage,
 }
 
+# Everything the inventory pages can archive, restore or delete.
+MANAGED_MODELS = {**MODEL_BY_TYPE, "destination": Destination}
+
 PRICE_FIELD_BY_TYPE = {
     InventoryType.HOTEL: "base_price",
     InventoryType.CAR: "daily_price",
@@ -119,6 +122,8 @@ def offer_summary(offer):
 
 def list_destinations(*, q="", status="", include_archived=False):
     queryset = Destination.objects.all()
+    if not include_archived and status != "archived":
+        queryset = queryset.filter(is_deleted=False)
     if q:
         queryset = queryset.filter(
             Q(name__icontains=q)
@@ -130,7 +135,9 @@ def list_destinations(*, q="", status="", include_archived=False):
     if status == "active":
         queryset = queryset.filter(is_active=True)
     elif status == "inactive":
-        queryset = queryset.filter(is_active=False)
+        queryset = queryset.filter(is_active=False, is_deleted=False)
+    elif status == "archived":
+        queryset = queryset.filter(is_deleted=True)
     return queryset
 
 
@@ -158,7 +165,9 @@ def _base_filter(
     if status == "active":
         queryset = queryset.filter(is_active=True)
     elif status == "inactive":
-        queryset = queryset.filter(is_active=False)
+        queryset = queryset.filter(is_active=False, is_deleted=False)
+    elif status == "archived":
+        queryset = queryset.filter(is_deleted=True)
     min_price = _to_decimal(min_price)
     max_price = _to_decimal(max_price)
     if min_price is not None:
@@ -193,7 +202,9 @@ def list_hotels(
     )
 
 
-def list_cars(*, q="", destination=None, status="", min_price=None, max_price=None):
+def list_cars(
+    *, q="", destination=None, status="", min_price=None, max_price=None, include_archived=False
+):
     return _base_filter(
         CarRental.objects.all(),
         q=q,
@@ -203,10 +214,13 @@ def list_cars(*, q="", destination=None, status="", min_price=None, max_price=No
         max_price=max_price,
         price_field="daily_price",
         search_fields=("name", "brand", "model_name", "vehicle_type", "destination__name"),
+        include_archived=include_archived,
     )
 
 
-def list_packages(*, q="", destination=None, status="", min_price=None, max_price=None):
+def list_packages(
+    *, q="", destination=None, status="", min_price=None, max_price=None, include_archived=False
+):
     return _base_filter(
         TourPackage.objects.all(),
         q=q,
@@ -216,6 +230,7 @@ def list_packages(*, q="", destination=None, status="", min_price=None, max_pric
         max_price=max_price,
         price_field="base_price",
         search_fields=("name", "description", "inclusions", "destination__name"),
+        include_archived=include_archived,
     )
 
 
@@ -425,3 +440,33 @@ def get_inventory_object(inventory_type, object_id):
     if not model:
         return None
     return model.objects.filter(pk=object_id, is_deleted=False).first()
+
+
+def get_managed_object(kind, object_id):
+    """Any inventory row by kind, archived or not (for archive / restore / delete)."""
+    model = MANAGED_MODELS.get(kind)
+    if not model:
+        return None
+    return model.objects.filter(pk=object_id).first()
+
+
+def bookings_for(kind, obj):
+    """Bookings made for an inventory item (bookings keep a type + id, not a FK)."""
+    from bookings.models import Booking
+
+    if kind not in MODEL_BY_TYPE:
+        return Booking.objects.none()
+    return Booking.objects.filter(product_type=kind, product_id=obj.pk)
+
+
+def items_using_destination(destination, *, include_archived=True):
+    """`{kind: queryset}` of the hotels, cars and packages placed at a destination."""
+    found = {}
+    for kind, model in MODEL_BY_TYPE.items():
+        queryset = model.objects.filter(destination=destination)
+        if not include_archived:
+            queryset = queryset.filter(is_deleted=False)
+        found[kind] = queryset
+    return found
+
+

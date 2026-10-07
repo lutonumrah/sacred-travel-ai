@@ -338,3 +338,113 @@ class OfferPricingTests(InventoryFixture):
         self.assertEqual(resort["offer"]["title"], "Saver")
 
 
+class ArchiveTests(InventoryFixture):
+    def setUp(self):
+        super().setUp()
+        self.stock = User.objects.create_user("stock", password="pw", role="inventory")
+        self.employee = User.objects.create_user("emp", password="pw", role="employee")
+        self.client.force_login(self.stock)
+
+    def post(self, action, kind, obj):
+        return self.client.post(reverse(f"inventory:{action}", args=[kind, obj.pk]))
+
+    def test_archived_items_leave_lists_search_and_the_ai(self):
+        from conversations.ai import match_inventory
+
+        self.post("archive", "hotel", self.cheap)
+        self.cheap.refresh_from_db()
+        self.assertTrue(self.cheap.is_deleted)
+        self.assertFalse(self.cheap.is_active)
+        listed = self.client.get(reverse("inventory:hotels")).context["page_obj"]
+        self.assertNotIn("Palm Stay", [hotel.name for hotel in listed])
+        self.assertNotIn("Palm Stay", [item["name"] for item in search_inventory()])
+        self.assertNotIn(
+            "Palm Stay", [item["name"] for item in search_inventory(active_only=False)]
+        )
+        ai = match_inventory({"destination": "Goa", "product_type": "hotel"})
+        self.assertNotIn("Palm Stay", [item["name"] for item in ai])
+        archived = self.client.get(reverse("inventory:hotels"), {"archived": "on"})
+        self.assertContains(archived, "Palm Stay")
+        self.assertContains(archived, "Archived")
+        self.assertContains(archived, reverse("inventory:restore", args=["hotel", self.cheap.pk]))
+
+    def test_restore_brings_an_item_back_inactive(self):
+        self.post("archive", "car", self.car)
+        self.post("restore", "car", self.car)
+        self.car.refresh_from_db()
+        self.assertFalse(self.car.is_deleted)
+        self.assertFalse(self.car.is_active)
+        self.assertContains(self.client.get(reverse("inventory:cars")), "Goa Swift")
+
+    def test_a_booked_item_can_never_be_hard_deleted(self):
+        from bookings.models import Booking
+        from crm.models import Customer
+
+        Booking.objects.create(
+            booking_number="STA-1", customer=Customer.objects.create(first_name="A"),
+            product_type="package", product_id=self.package.pk, product_name="Manali Week",
+        )
+        self.post("archive", "package", self.package)
+        response = self.post("delete", "package", self.package)
+        self.assertTrue(TourPackage.objects.filter(pk=self.package.pk).exists())
+        self.assertContains(self.client.get(response.url), "cannot be deleted")
+
+    def test_hard_delete_needs_archiving_first_and_cleans_up(self):
+        set_visibility(
+            website=self.website, inventory_type="hotel", object_id=self.pricey.pk,
+            is_visible=False,
+        )
+        self.post("delete", "hotel", self.pricey)
+        self.assertTrue(Hotel.objects.filter(pk=self.pricey.pk).exists())
+        self.post("archive", "hotel", self.pricey)
+        self.post("delete", "hotel", self.pricey)
+        self.assertFalse(Hotel.objects.filter(pk=self.pricey.pk).exists())
+        self.assertFalse(
+            InventoryWebsiteVisibility.objects.filter(object_id=self.pricey.pk).exists()
+        )
+
+    def test_a_destination_in_use_cannot_be_archived_or_deleted(self):
+        self.post("archive", "destination", self.manali)
+        self.manali.refresh_from_db()
+        self.assertFalse(self.manali.is_deleted)
+
+        self.post("archive", "package", self.package)
+        self.post("archive", "destination", self.manali)
+        self.manali.refresh_from_db()
+        self.assertTrue(self.manali.is_deleted)
+        # Archived destinations leave the pickers and the AI's place list.
+        from conversations.ai import _known_destinations
+
+        from .forms import HotelForm
+
+        self.assertNotIn(self.manali, HotelForm().fields["destination"].queryset)
+        self.assertNotIn("Manali", [row[0] for row in _known_destinations()])
+        # The archived package still points at it.
+        self.post("delete", "destination", self.manali)
+        self.assertTrue(Destination.objects.filter(pk=self.manali.pk).exists())
+
+    def test_employees_cannot_archive_and_see_no_buttons(self):
+        self.client.force_login(self.employee)
+        response = self.post("archive", "hotel", self.cheap)
+        self.assertRedirects(response, reverse("dashboard:overview"))
+        self.cheap.refresh_from_db()
+        self.assertFalse(self.cheap.is_deleted)
+        page = self.client.get(reverse("inventory:hotels"))
+        self.assertNotContains(page, reverse("inventory:archive", args=["hotel", self.cheap.pk]))
+
+    def test_archived_items_cannot_be_booked(self):
+        from bookings.services import BookingError, booking_from_recommendation
+        from conversations.models import Conversation, Recommendation
+        from crm.models import Customer
+
+        conversation = Conversation.objects.create(website=self.website, session_key="s1")
+        rec = Recommendation.objects.create(
+            conversation=conversation, inventory_type="package", object_id=self.package.pk,
+            title="Manali Week", price=Decimal("38000"),
+        )
+        self.post("archive", "package", self.package)
+        with self.assertRaises(BookingError):
+            booking_from_recommendation(
+                recommendation=rec, customer=Customer.objects.create(first_name="A"),
+                travel_start=timezone.localdate() + timedelta(days=5),
+            )

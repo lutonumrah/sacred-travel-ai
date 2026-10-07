@@ -7,6 +7,7 @@
 {% block content %}
   <form method="get" class="filter-bar">
     <div class="form-row"><label for="q">Search</label><input class="input" id="q" name="q" value="{{ q }}"></div>
+    <div class="form-row check"><input type="checkbox" id="archived" name="archived" {% if include_archived %}checked{% endif %}><label for="archived">Include archived</label></div>
     <div class="form-row filter-actions">
       <button class="btn" type="submit">Filter</button>
       <a class="btn ghost" href="{% url 'inventory:destinations' %}">Reset</a>
@@ -27,8 +28,8 @@
               <td class="right">{{ destination.hotels.count }}</td>
               <td class="right">{{ destination.cars.count }}</td>
               <td class="right">{{ destination.packages.count }}</td>
-              <td>{% if destination.is_active %}<span class="badge ok">Active</span>{% else %}<span class="badge grey">Inactive</span>{% endif %}</td>
-              <td class="actions">{% if can_edit %}<a class="btn small ghost" href="{% url 'inventory:destination_edit' destination.pk %}">Edit</a>{% endif %}</td>
+              <td>{% include "inventory/_status_badge.html" with obj=destination %}</td>
+              <td class="actions">{% include "inventory/_row_actions.html" with obj=destination kind="destination" edit_url="inventory:destination_edit" %}</td>
             </tr>
           {% empty %}
             <tr><td colspan="10">{% include "partials/_empty.html" with title="No destinations yet" hint="Destinations are how the AI recognises where a customer wants to go." %}</td></tr>
