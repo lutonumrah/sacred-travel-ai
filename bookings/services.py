@@ -7,6 +7,7 @@ from decimal import Decimal, ROUND_HALF_UP
 
 from django.conf import settings
 from django.db import transaction
+from django.db.models import Q
 from django.urls import reverse
 from django.utils import timezone
 
@@ -155,7 +156,9 @@ def _notify_booking_people(*, booking, title, body="", actor=None):
     people = {
         user.pk: user
         for user in get_user_model().objects.filter(
-            is_active=True, is_active_employee=True, role__in=["admin", "manager"]
+            Q(role__in=["admin", "manager"]) | Q(is_superuser=True),
+            is_active=True,
+            is_active_employee=True,
         )
     }
     for user in (booking.created_by, booking.lead.assigned_to if booking.lead_id else None):

@@ -13,6 +13,7 @@ mailed (see EMAILED_TYPES). Mail failures are logged and never reach callers.
 import logging
 
 from django.apps import apps
+from django.db.models import Q
 from django.urls import reverse
 
 logger = logging.getLogger(__name__)
@@ -123,7 +124,11 @@ def notify_managers(
     user_model = apps.get_model("accounts", "User")
     recipients = user_model.objects.filter(
         is_active=True, is_active_employee=True
-    ).filter(role__in=["admin", "manager"])
+    ).filter(
+        # `createsuperuser` leaves the role at its default; superusers see
+        # everything a manager does, so they get the manager alerts too.
+        Q(role__in=["admin", "manager"]) | Q(is_superuser=True)
+    )
     if exclude is not None:
         recipients = recipients.exclude(pk=exclude.pk)
     return notify_many(
