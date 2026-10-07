@@ -122,3 +122,5 @@ class InventorySearchResultSerializer(serializers.Serializer):
     description = serializers.CharField()
     image = serializers.CharField()
     priority = serializers.IntegerField()
+    # Hotels: the room offer behind `price` (null when it is the base price).
+    offer = serializers.JSONField(required=False, allow_null=True)

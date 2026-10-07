@@ -645,9 +645,11 @@ def process_webhook(*, event_id, event, payload, request=None):
 # The subtotal is always computed here from the inventory row, never taken from
 # the client, in the same units the chat quotes (`serialize_item` price labels):
 #
-#   hotel    base_price is the quoted "per night" rate: price × nights,
-#            nights = check-out − check-in (at least one). Room allocation for
-#            big parties is left to the consultant, as in the chat quote.
+#   hotel    the nightly rate (`inventory.selectors.hotel_nightly_price`: the
+#            cheapest active room offer valid for every night, else base_price)
+#            × nights, nights = check-out − check-in (at least one). Staff may
+#            pick a specific offer instead. Room allocation for big parties is
+#            left to the consultant, as in the chat quote.
 #   car      daily_price × rental days, counting the pick-up and drop-off day
 #            (12th → 14th is 3 days); the car must seat every traveller
 #   package  base_price is per person: price × travellers; the end date follows
@@ -663,13 +665,16 @@ def _money_text(currency, amount):
     return f"{currency} {Decimal(amount):,.0f}"
 
 
-def quote_item(*, inventory_type, item, travel_start, travel_end=None, travelers=1):
+def quote_item(*, inventory_type, item, travel_start, travel_end=None, travelers=1, offer=None):
     """Price an inventory item for given dates and party size.
 
-    Returns a dict with `subtotal`, the effective dates and a readable breakdown.
+    Returns a dict with `subtotal`, the effective dates, a readable breakdown and,
+    for hotels, the room `offer` used (None for the base price). `offer` asks
+    for a specific room offer of this hotel; it must be valid for the stay.
     Raises BookingError when the request does not make sense for this product.
     """
     from inventory.models import InventoryType
+    from inventory.selectors import hotel_nightly_price, offer_summary, offers_valid_for
 
     if not travel_start:
         raise BookingError("Choose a travel date.")
@@ -679,6 +684,7 @@ def quote_item(*, inventory_type, item, travel_start, travel_end=None, travelers
         raise BookingError(f"Travellers must be between 1 and {MAX_TRAVELERS}.")
     travelers = int(travelers)
     currency = item.currency
+    used_offer = None
 
     if inventory_type == InventoryType.HOTEL:
         if not travel_end or travel_end <= travel_start:
@@ -686,11 +692,20 @@ def quote_item(*, inventory_type, item, travel_start, travel_end=None, travelers
         nights = (travel_end - travel_start).days
         if nights > MAX_STAY_DAYS:
             raise BookingError(f"Stays longer than {MAX_STAY_DAYS} nights need a consultant.")
-        unit_price = item.base_price
+        if offer is not None and not (
+            offer.hotel_id == item.pk
+            and offers_valid_for(travel_start, travel_end).filter(pk=offer.pk).exists()
+        ):
+            raise BookingError(f"The {offer.title} offer is not available for these dates.")
+        unit_price, currency, used_offer = hotel_nightly_price(
+            item, travel_start, travel_end, offer=offer
+        )
         quantity = nights
         description = (
             f"{nights} night{'s' if nights > 1 else ''} × {_money_text(currency, unit_price)}"
         )
+        if used_offer is not None:
+            description += f" ({used_offer.room_type or used_offer.title})"
     elif inventory_type == InventoryType.CAR:
         travel_end = travel_end or travel_start
         if travel_end < travel_start:
@@ -727,7 +742,25 @@ def quote_item(*, inventory_type, item, travel_start, travel_end=None, travelers
         "unit_price": str(unit_price),
         "quantity": quantity,
         "description": description,
+        "offer": offer_summary(used_offer),
     }
+
+
+def booking_summary(quote, *, base=None, **extra):
+    """The `Booking.summary` for a quote: its pricing and the room offer it used.
+
+    The offer is a snapshot, so later edits to the offer don't rewrite the booking.
+    """
+    summary = {key: value for key, value in (base or {}).items() if key != "offer"}
+    summary["pricing"] = {
+        "unit_price": quote["unit_price"],
+        "quantity": quote["quantity"],
+        "description": quote["description"],
+    }
+    if quote.get("offer"):
+        summary["offer"] = quote["offer"]
+    summary.update(extra)
+    return summary
 
 
 # --------------------------------------------------------------------------
@@ -878,15 +911,9 @@ def booking_from_recommendation(
         currency=quote["currency"],
         subtotal=quote["subtotal"],
         status=BookingStatus.PENDING,
-        summary={
-            **(recommendation.payload or {}),
-            "pricing": {
-                "unit_price": quote["unit_price"],
-                "quantity": quote["quantity"],
-                "description": quote["description"],
-            },
-            **({"guest": guest} if guest else {}),
-        },
+        summary=booking_summary(
+            quote, base=recommendation.payload, **({"guest": guest} if guest else {})
+        ),
     )
     create_booking(booking=booking, actor=actor, request=request)
     issue_payment_link(booking=booking, actor=actor, request=request)

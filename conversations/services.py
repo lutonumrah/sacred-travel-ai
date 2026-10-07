@@ -105,6 +105,7 @@ def save_recommendations(*, conversation, items):
                 "detail": item.get("detail", ""),
                 "destination": item.get("destination", ""),
                 "price_label": item.get("price_label", ""),
+                **({"offer": item["offer"]} if item.get("offer") else {}),
             },
         )
         for item in items

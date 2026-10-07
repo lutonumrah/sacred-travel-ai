@@ -53,7 +53,7 @@ class BookingCreateView(SalesRequiredMixin, CreateView):
         return kwargs
 
     def form_valid(self, form):
-        booking = form.save(commit=False)
+        booking = form.apply_pricing(form.save(commit=False))
         booking.status = BookingStatus.PENDING
         services.create_booking(booking=booking, actor=self.request.user, request=self.request)
         # Every staff booking gets a customer link straight away, ready to copy or send.

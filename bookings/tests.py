@@ -1125,3 +1125,166 @@ class CustomerEmailTests(BookingFixture):
         page = self.client.get(reverse("bookings:detail", args=[booking.pk])).content.decode()
         self.assertIn("Customer emails", page)
         self.assertIn("Payment link → ana@x.com", page)
+
+
+# --------------------------------------------------------------------------
+# Batch 6: hotel room offers in pricing, payment retry, role-aware buttons
+# --------------------------------------------------------------------------
+
+from inventory.models import HotelOffer  # noqa: E402
+
+
+class OfferFixture(BookingFixture):
+    def setUp(self):
+        super().setUp()
+        self.start = timezone.localdate() + timedelta(days=10)
+        self.end = self.start + timedelta(days=3)
+        self.hotel = Hotel.objects.create(name="Sea View", base_price=Decimal("5000"))
+        # Cheapest, but its season ends before the last night of the stay.
+        self.short = HotelOffer.objects.create(
+            hotel=self.hotel, title="Flash sale", room_type="Standard", price=Decimal("2000"),
+            valid_to=self.start + timedelta(days=1),
+        )
+        self.deluxe = HotelOffer.objects.create(
+            hotel=self.hotel, title="Monsoon saver", room_type="Deluxe", price=Decimal("4000"),
+            valid_from=self.start, valid_to=self.end, inclusions="Breakfast",
+        )
+        self.suite = HotelOffer.objects.create(
+            hotel=self.hotel, title="Suite deal", room_type="Suite", price=Decimal("7000"),
+        )
+
+    def quote(self, **kwargs):
+        return services.quote_item(
+            inventory_type="hotel", item=self.hotel, travel_start=self.start,
+            travel_end=self.end, travelers=2, **kwargs,
+        )
+
+
+class OfferQuoteTests(OfferFixture):
+    def test_the_cheapest_offer_valid_for_every_night_prices_the_stay(self):
+        quote = self.quote()
+        self.assertEqual(quote["subtotal"], Decimal("12000.00"))
+        self.assertEqual(quote["offer"]["id"], self.deluxe.pk)
+        self.assertEqual(quote["description"], "3 nights × INR 4,000 (Deluxe)")
+
+    def test_inactive_offers_are_ignored(self):
+        HotelOffer.objects.filter(pk=self.deluxe.pk).update(is_active=False)
+        self.assertEqual(self.quote()["offer"]["id"], self.suite.pk)
+
+    def test_with_no_valid_offer_the_base_price_applies(self):
+        HotelOffer.objects.filter(hotel=self.hotel).update(is_active=False)
+        quote = self.quote()
+        self.assertIsNone(quote["offer"])
+        self.assertEqual(quote["subtotal"], Decimal("15000.00"))
+
+    def test_a_chosen_offer_is_used_even_when_dearer(self):
+        quote = self.quote(offer=self.suite)
+        self.assertEqual(quote["subtotal"], Decimal("21000.00"))
+        self.assertEqual(quote["offer"]["room_type"], "Suite")
+
+    def test_a_chosen_offer_must_cover_the_dates_and_the_hotel(self):
+        with self.assertRaises(services.BookingError):
+            self.quote(offer=self.short)
+        other = Hotel.objects.create(name="Other", base_price=Decimal("1"))
+        foreign = HotelOffer.objects.create(hotel=other, title="X", price=Decimal("10"))
+        with self.assertRaises(services.BookingError):
+            self.quote(offer=foreign)
+
+
+class OfferBookingTests(OfferFixture):
+    def setUp(self):
+        super().setUp()
+        cache.clear()
+        self.conversation, _ = chat_services.start_conversation(website=self.website)
+        self.conversation.lead = self.lead
+        self.conversation.customer = self.customer
+        self.conversation.save()
+        self.recommendation = Recommendation.objects.create(
+            conversation=self.conversation, inventory_type="hotel", object_id=self.hotel.pk,
+            title=self.hotel.name, price=Decimal("7000"),
+            payload={"offer": {"id": self.suite.pk, "title": "Stale"}},
+        )
+
+    def test_a_chat_booking_is_priced_with_the_offer_and_keeps_it(self):
+        with self.captureOnCommitCallbacks(execute=True):
+            booking, _ = services.booking_from_recommendation(
+                recommendation=self.recommendation, customer=self.customer,
+                travel_start=self.start, travel_end=self.end, travelers=2,
+            )
+        self.assertEqual(booking.subtotal, Decimal("12000.00"))
+        self.assertEqual(booking.total_amount, Decimal("12600.00"))
+        self.assertEqual(booking.summary["offer"]["title"], "Monsoon saver")
+        self.assertEqual(booking.room_label, "Deluxe")
+
+        page = self.client.get(reverse("public:pay", args=[booking.payment_token]))
+        self.assertContains(page, "Deluxe")
+        self.assertContains(page, "Includes Breakfast")
+        to_customer = [m.body for m in mail.outbox if "ana@x.com" in m.to]
+        self.assertTrue(to_customer and "Room:       Deluxe" in to_customer[-1])
+
+        self.client.force_login(self.manager)
+        detail = self.client.get(reverse("bookings:detail", args=[booking.pk]))
+        self.assertContains(detail, "Monsoon saver")
+
+    def test_an_offer_edited_later_does_not_rewrite_the_booking(self):
+        booking, _ = services.booking_from_recommendation(
+            recommendation=self.recommendation, customer=self.customer,
+            travel_start=self.start, travel_end=self.end, travelers=2,
+        )
+        HotelOffer.objects.filter(pk=self.deluxe.pk).update(room_type="Renamed")
+        booking.refresh_from_db()
+        self.assertEqual(booking.room_label, "Deluxe")
+
+
+class StaffOfferBookingTests(OfferFixture):
+    def post(self, **fields):
+        data = {
+            "customer": self.customer.pk,
+            "website": self.website.pk,
+            "product_type": "hotel",
+            "product_id": self.hotel.pk,
+            "product_name": "",
+            "travel_start": self.start.isoformat(),
+            "travel_end": self.end.isoformat(),
+            "travelers_count": 2,
+            "currency": "INR",
+            "subtotal": "",
+        }
+        data.update(fields)
+        self.client.force_login(self.agent)
+        return self.client.post(reverse("bookings:create"), data)
+
+    def test_the_form_offers_a_room_choice(self):
+        self.client.force_login(self.agent)
+        page = self.client.get(reverse("bookings:create"))
+        self.assertContains(page, "Sea View (#%d) · Suite" % self.hotel.pk)
+
+    def test_a_blank_subtotal_is_priced_from_the_chosen_offer(self):
+        self.post(hotel_offer=self.suite.pk)
+        booking = Booking.objects.get()
+        self.assertEqual(booking.subtotal, Decimal("21000.00"))
+        self.assertEqual(booking.product_name, "Sea View")
+        self.assertEqual(booking.room_label, "Suite")
+
+    def test_without_a_choice_the_rule_picks_the_offer(self):
+        self.post()
+        booking = Booking.objects.get()
+        self.assertEqual(booking.subtotal, Decimal("12000.00"))
+        self.assertEqual(booking.room_offer["id"], self.deluxe.pk)
+
+    def test_a_typed_subtotal_wins_but_the_offer_is_recorded(self):
+        self.post(hotel_offer=self.suite.pk, subtotal="15000")
+        booking = Booking.objects.get()
+        self.assertEqual(booking.subtotal, Decimal("15000.00"))
+        self.assertEqual(booking.room_label, "Suite")
+
+    def test_an_offer_from_another_hotel_or_dates_it_does_not_cover_is_refused(self):
+        other = Hotel.objects.create(name="Other", base_price=Decimal("100"))
+        response = self.post(product_id=other.pk, hotel_offer=self.suite.pk)
+        self.assertEqual(response.status_code, 200)
+        response = self.post(hotel_offer=self.short.pk)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "not available for these dates")
+        self.assertEqual(Booking.objects.count(), 0)
+
+

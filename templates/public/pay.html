@@ -22,6 +22,7 @@
     </div>
     <dl class="definition">
       <dt>Booking</dt><dd class="mono">{{ booking.booking_number }}</dd>
+      {% if booking.room_label %}<dt>Room</dt><dd>{{ booking.room_label }}{% if booking.room_offer.inclusions %}<div class="muted small">Includes {{ booking.room_offer.inclusions }}</div>{% endif %}</dd>{% endif %}
       <dt>Name</dt><dd>{{ guest.name }}</dd>
       <dt>Dates</dt>
       <dd>{{ booking.travel_start|date:"D, d M Y"|default:"—" }}{% if booking.travel_end and booking.travel_end != booking.travel_start %} → {{ booking.travel_end|date:"D, d M Y" }}{% endif %}</dd>

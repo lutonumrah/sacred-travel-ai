@@ -86,7 +86,7 @@
         {% for rec in recommendations %}
           <div style="padding:.4rem 0;border-bottom:1px solid var(--line)">
             <strong>{{ rec.title }}</strong>{% if rec.is_selected %} <span class="badge ok">Selected</span>{% endif %}
-            <div class="muted small">{{ rec.inventory_type }} #{{ rec.object_id }} · {{ rec.currency }} {{ rec.price|floatformat:0 }} {{ rec.payload.price_label }}</div>
+            <div class="muted small">{{ rec.inventory_type }} #{{ rec.object_id }} · {{ rec.currency }} {{ rec.price|floatformat:0 }} {{ rec.payload.price_label }}{% if rec.payload.offer %} · {{ rec.payload.offer.room_type|default:rec.payload.offer.title }}{% endif %}</div>
             {% if can_reply and rec.price %}
               <details class="book-for-customer">
                 <summary class="small">Book this for the customer</summary>

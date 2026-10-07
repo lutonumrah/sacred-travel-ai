@@ -218,7 +218,7 @@
     var lines = [intro || "Booking " + booking.number + " created."];
     if (booking.total) lines.push("Total " + money(booking.currency, booking.total) + " incl. taxes.");
     var node = el("div", { className: "scared-card" }, [
-      el("b", { text: booking.product || "Your booking" }),
+      el("b", { text: (booking.product || "Your booking") + (booking.room ? " · " + booking.room : "") }),
       el("span", { className: "scared-meta", text: lines.join(" ") }),
     ]);
     var url = safeUrl(booking.payment_url);

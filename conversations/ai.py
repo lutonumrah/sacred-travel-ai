@@ -441,6 +441,9 @@ def match_inventory(requirements, website=None, limit=4):
         transmission=preferences.get("transmission") or "",
         # A car must seat the whole party.
         min_seats=requirements.get("travelers") or None,
+        # Hotels are quoted with the room offer valid for these dates.
+        check_in=requirements.get("travel_start") or None,
+        check_out=requirements.get("travel_end") or None,
     )
 
 
@@ -756,9 +759,15 @@ def _inventory_block(items):
     lines = []
     for item in items:
         item_id = f"{item['inventory_type']}:{item['id']}"
+        offer = item.get("offer") or {}
+        extra = ""
+        if offer:
+            extra = f" | offer: {offer.get('title', '')}"
+            if offer.get("inclusions"):
+                extra += f" (includes {offer['inclusions']})"
         lines.append(
             f"- id={item_id} | {item['name']} | {item.get('destination') or 'n/a'} "
-            f"| {item.get('detail', '')} | {_money(item)}"
+            f"| {item.get('detail', '')} | {_money(item)}{extra}"
         )
     return "\n".join(lines)
 

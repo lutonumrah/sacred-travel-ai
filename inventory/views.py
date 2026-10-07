@@ -361,6 +361,8 @@ class InventorySearchView(PageMixin, TemplateView):
                 max_price=data.get("max_price"),
                 website=data.get("website"),
                 limit=50,
+                check_in=data.get("check_in"),
+                check_out=data.get("check_out"),
             )
         ctx["form"] = form
         ctx["results"] = results

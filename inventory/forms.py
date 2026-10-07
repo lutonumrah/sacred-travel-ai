@@ -169,6 +169,12 @@ class InventorySearchForm(StyledFormMixin, forms.Form):
         choices=[("", "All types")] + list(InventoryType.choices),
     )
     destination = forms.CharField(required=False, help_text="Destination or city name")
+    check_in = forms.DateField(
+        required=False,
+        widget=forms.DateInput(attrs={"type": "date"}),
+        help_text="Hotels are priced with the room offer valid for these dates.",
+    )
+    check_out = forms.DateField(required=False, widget=forms.DateInput(attrs={"type": "date"}))
     min_price = forms.DecimalField(required=False)
     max_price = forms.DecimalField(required=False)
     website = forms.ModelChoiceField(

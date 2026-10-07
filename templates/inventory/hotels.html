@@ -10,7 +10,7 @@
     <div class="panel-head"><h2>{{ total }} hotel{{ total|pluralize }}</h2></div>
     <div class="table-wrap">
       <table class="data">
-        <thead><tr><th>Hotel</th><th>Destination</th><th>Rating</th><th class="right">Base price</th><th class="right">Offers</th><th>Status</th><th></th></tr></thead>
+        <thead><tr><th>Hotel</th><th>Destination</th><th>Rating</th><th class="right">Base price</th><th class="right">Tonight</th><th class="right">Offers</th><th>Status</th><th></th></tr></thead>
         <tbody>
           {% for hotel in page_obj %}
             <tr>
@@ -18,6 +18,7 @@
               <td>{{ hotel.destination.name|default:"—" }}</td>
               <td>{{ hotel.star_rating }}★</td>
               <td class="right">{{ hotel.currency }} {{ hotel.base_price|floatformat:0 }}</td>
+              <td class="right" title="Cheapest active offer valid tonight, else the base price">{{ hotel.nightly_price|floatformat:0 }}</td>
               <td class="right">{{ hotel.offers.count }}</td>
               <td>{% if hotel.is_active %}<span class="badge ok">Active</span>{% else %}<span class="badge grey">Inactive</span>{% endif %}</td>
               <td class="actions">
@@ -30,7 +31,7 @@
               </td>
             </tr>
           {% empty %}
-            <tr><td colspan="7">{% include "partials/_empty.html" with title="No hotels match" hint="Add hotels so the AI has something to recommend." %}</td></tr>
+            <tr><td colspan="8">{% include "partials/_empty.html" with title="No hotels match" hint="Add hotels so the AI has something to recommend." %}</td></tr>
           {% endfor %}
         </tbody>
       </table>

@@ -96,6 +96,7 @@ def widget_card(recommendation):
         "currency": recommendation.currency,
         "price_label": payload.get("price_label", ""),
         "detail": payload.get("detail", ""),
+        "offer": (payload.get("offer") or {}).get("title", ""),
         "bookable": bool(recommendation.price),
     }
 
@@ -174,6 +175,7 @@ def widget_bookings(conversation, request=None, *, bookings=None):
                 "status": booking.status,
                 "status_display": booking.get_status_display(),
                 "product": booking.product_name,
+                "room": booking.room_label,
                 "total": booking.total_amount,
                 "currency": booking.currency,
                 "payment_url": booking_services.payment_url(booking, request) if payable else "",

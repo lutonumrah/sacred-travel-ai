@@ -26,7 +26,7 @@
               <td><strong><a href="{% url 'bookings:detail' booking.pk %}">{{ booking.booking_number }}</a></strong>
                 {% if booking.website %}<div class="muted small">{{ booking.website.source_identifier }}</div>{% endif %}</td>
               <td><a href="{% url 'crm:customer_detail' booking.customer.pk %}">{{ booking.customer.full_name }}</a></td>
-              <td>{{ booking.product_name }}<div class="muted small">{{ booking.product_type }} #{{ booking.product_id }}</div></td>
+              <td>{{ booking.product_name }}<div class="muted small">{{ booking.product_type }} #{{ booking.product_id }}{% if booking.room_label %} · {{ booking.room_label }}{% endif %}</div></td>
               <td class="small nowrap">{{ booking.travel_start|date:"d M"|default:"—" }}{% if booking.travel_end %} → {{ booking.travel_end|date:"d M" }}{% endif %}</td>
               <td class="right">{{ booking.currency }} {{ booking.total_amount|floatformat:2 }}</td>
               <td><span class="badge status-{{ booking.status }}">{{ booking.get_status_display }}</span></td>

@@ -95,6 +95,9 @@ class InventorySearchAPI(APIView):
             max_price=params.get("max_price"),
             website=website,
             limit=_search_limit(params.get("limit", SEARCH_LIMIT_DEFAULT)),
+            # ISO dates; anything unparseable prices hotels for tonight.
+            check_in=params.get("check_in") or None,
+            check_out=params.get("check_out") or None,
         )
         return SuccessResponse(
             {

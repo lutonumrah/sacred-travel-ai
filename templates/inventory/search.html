@@ -22,6 +22,7 @@
             <strong>{{ item.name }}</strong>
             <span class="muted small">{{ item.destination|default:"No destination" }} · {{ item.detail }}</span>
             <span class="price">{{ item.currency }} {{ item.price|floatformat:0 }} <span class="muted small">{{ item.price_label }}</span></span>
+            {% if item.offer %}<span class="muted small">Offer: {{ item.offer.title }}{% if item.offer.inclusions %} · includes {{ item.offer.inclusions }}{% endif %}</span>{% elif item.inventory_type == 'hotel' %}<span class="muted small">Base price (no offer valid for these dates)</span>{% endif %}
             {% if item.priority %}<span class="muted small">Priority {{ item.priority }}</span>{% endif %}
           </div>
         {% endfor %}

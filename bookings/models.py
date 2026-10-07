@@ -100,6 +100,16 @@ class Booking(TimeStampedModel, AttributionFields):
         return f"{self.booking_number} · {self.product_name}"
 
     @property
+    def room_offer(self):
+        """The hotel room offer this booking was priced with (a snapshot), or {}."""
+        return (self.summary or {}).get("offer") or {}
+
+    @property
+    def room_label(self):
+        offer = self.room_offer
+        return offer.get("room_type") or offer.get("title") or ""
+
+    @property
     def is_payable(self):
         return self.status in (BookingStatus.PENDING, BookingStatus.FAILED)
 

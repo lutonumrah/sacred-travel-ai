@@ -299,6 +299,7 @@ class WidgetBookAPI(APIView):
                     "number": booking.booking_number,
                     "status": booking.status,
                     "product": booking.product_name,
+                    "room": booking.room_label,
                     "travel_start": booking.travel_start,
                     "travel_end": booking.travel_end,
                     "travelers": booking.travelers_count,

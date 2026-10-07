@@ -24,6 +24,7 @@
           <dt>Customer</dt><dd><a href="{% url 'crm:customer_detail' booking.customer.pk %}">{{ booking.customer.full_name }}</a>
             <div class="muted small">{{ booking.customer.email }} {{ booking.customer.phone }}</div></dd>
           <dt>Product</dt><dd>{{ booking.product_name }} <span class="muted small">({{ booking.product_type }} #{{ booking.product_id }})</span></dd>
+          {% if booking.room_label %}<dt>Room</dt><dd>{{ booking.room_label }}{% if booking.room_offer.title and booking.room_offer.title != booking.room_label %} <span class="muted small">· {{ booking.room_offer.title }}</span>{% endif %}{% if booking.room_offer.inclusions %}<div class="muted small">Includes {{ booking.room_offer.inclusions }}</div>{% endif %}</dd>{% endif %}
           <dt>Travel</dt><dd>{{ booking.travel_start|date:"d M Y"|default:"—" }}{% if booking.travel_end %} → {{ booking.travel_end|date:"d M Y" }}{% endif %}</dd>
           <dt>Travellers</dt><dd>{{ booking.travelers_count }}</dd>
           <dt>Website</dt><dd>{{ booking.website.name|default:"—" }}</dd>

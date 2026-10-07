@@ -233,3 +233,108 @@ class HotelOfferEditTests(InventoryFixture):
         self.post(title="Hacked")
         self.offer.refresh_from_db()
         self.assertEqual(self.offer.title, "Monsoon deal")
+
+
+# --------------------------------------------------------------------------
+# Batch 6: room offers drive the hotel price; archive / restore / delete
+# --------------------------------------------------------------------------
+
+from datetime import timedelta  # noqa: E402
+
+from django.utils import timezone  # noqa: E402
+
+from .models import HotelOffer, InventoryWebsiteVisibility  # noqa: E402
+from .selectors import hotel_nightly_price  # noqa: E402
+
+
+class OfferPricingTests(InventoryFixture):
+    def setUp(self):
+        super().setUp()
+        self.today = timezone.localdate()
+        self.trip = self.today + timedelta(days=30)
+
+    def offer(self, hotel, price, **kwargs):
+        return HotelOffer.objects.create(
+            hotel=hotel, title=kwargs.pop("title", f"Offer {price}"), price=Decimal(price), **kwargs
+        )
+
+    def hotels(self, **kwargs):
+        return {
+            item["name"]: item
+            for item in search_inventory(inventory_type=InventoryType.HOTEL, **kwargs)
+        }
+
+    def test_without_offers_the_base_price_is_used(self):
+        item = self.hotels()["Palm Stay"]
+        self.assertEqual(item["price"], Decimal("3000"))
+        self.assertIsNone(item["offer"])
+
+    def test_the_cheapest_active_offer_valid_for_the_dates_wins(self):
+        self.offer(self.pricey, "6000", room_type="Deluxe", valid_from=self.trip)
+        self.offer(self.pricey, "5000", title="Off season", is_active=False)
+        self.offer(self.pricey, "4500", valid_to=self.trip - timedelta(days=1))
+        item = self.hotels(check_in=self.trip, check_out=self.trip + timedelta(days=2))[
+            "Beach Resort"
+        ]
+        self.assertEqual(item["price"], Decimal("6000"))
+        self.assertEqual(item["offer"]["room_type"], "Deluxe")
+        self.assertIn("Deluxe", item["detail"])
+
+    def test_an_offer_must_cover_every_night_of_the_stay(self):
+        self.offer(self.pricey, "4000", valid_from=self.trip, valid_to=self.trip + timedelta(days=1))
+        short = hotel_nightly_price(self.pricey, self.trip, self.trip + timedelta(days=2))
+        long = hotel_nightly_price(self.pricey, self.trip, self.trip + timedelta(days=3))
+        self.assertEqual(short[0], Decimal("4000"))
+        self.assertEqual(long[0], Decimal("9000"))
+        self.assertIsNone(long[2])
+
+    def test_with_no_dates_the_offer_valid_today_applies(self):
+        self.offer(self.pricey, "7000", valid_from=self.trip)
+        self.assertEqual(self.hotels()["Beach Resort"]["price"], Decimal("9000"))
+        self.offer(self.pricey, "8000", valid_from=self.today, valid_to=self.today)
+        self.assertEqual(self.hotels()["Beach Resort"]["price"], Decimal("8000"))
+
+    def test_max_price_filters_on_the_effective_price(self):
+        # Base 9000 but a 4000 offer: inside a 5000 budget.
+        self.offer(self.pricey, "4000")
+        # Base 3000 but its only valid offer is 6000: outside it.
+        self.offer(self.cheap, "6000")
+        names = set(self.hotels(max_price=5000))
+        self.assertEqual(names, {"Beach Resort"})
+        self.assertEqual(
+            {hotel.name for hotel in list_hotels(max_price=5000)}, {"Beach Resort", "Closed Inn"}
+        )
+
+    def test_the_ai_quotes_the_offer_for_the_customer_dates(self):
+        from conversations.ai import _inventory_block, match_inventory
+
+        self.offer(
+            self.pricey, "4200", title="Monsoon saver", room_type="Sea view",
+            inclusions="Breakfast", valid_from=self.trip,
+        )
+        items = match_inventory(
+            {
+                "destination": "Goa",
+                "product_type": "hotel",
+                "travel_start": self.trip.isoformat(),
+                "travel_end": (self.trip + timedelta(days=2)).isoformat(),
+            }
+        )
+        resort = next(item for item in items if item["name"] == "Beach Resort")
+        self.assertEqual(resort["price"], Decimal("4200"))
+        block = _inventory_block(items)
+        self.assertIn("INR 4,200 per night", block)
+        self.assertIn("offer: Monsoon saver (includes Breakfast)", block)
+
+    def test_the_search_api_takes_dates_and_returns_the_offer(self):
+        self.offer(self.pricey, "4200", title="Saver", valid_from=self.trip)
+        self.client.force_login(User.objects.create_user("emp", password="pw", role="employee"))
+        rows = self.client.get(
+            reverse("api_inventory:search"),
+            {"inventory_type": "hotel", "check_in": self.trip.isoformat()},
+        ).json()["data"]["results"]
+        resort = next(row for row in rows if row["name"] == "Beach Resort")
+        self.assertEqual(resort["price"], "4200.00")
+        self.assertEqual(resort["offer"]["title"], "Saver")
+
+
