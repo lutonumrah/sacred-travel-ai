@@ -226,3 +226,54 @@ class AISettings(TimeStampedModel):
         if provider == AIProvider.GEMINI:
             return self.gemini_api_key
         return self.anthropic_api_key
+
+
+class KnowledgeCategory(models.TextChoices):
+    POLICY = "policy", "Policy"
+    CANCELLATION = "cancellation", "Cancellation"
+    PAYMENT = "payment", "Payment"
+    FAQ = "faq", "FAQ"
+    TRAVEL_INFO = "travel_info", "Travel information"
+    OTHER = "other", "Other"
+
+
+class KnowledgeArticle(TimeStampedModel):
+    """Business facts the chat AI may quote: policies, FAQs, travel information.
+
+    The AI answers policy questions only from these articles (see
+    `conversations.ai`), so a missing article means "I don't know", never a guess.
+    """
+
+    title = models.CharField(max_length=200)
+    category = models.CharField(
+        max_length=20, choices=KnowledgeCategory.choices, default=KnowledgeCategory.FAQ
+    )
+    content = models.TextField()
+    keywords = models.CharField(
+        max_length=255,
+        blank=True,
+        help_text="Comma-separated words or phrases customers use for this, e.g. "
+        "“refund, cancel, money back”. Lets the rule-based replies find it.",
+    )
+    website = models.ForeignKey(
+        Website,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="knowledge_articles",
+        help_text="Leave blank to use it on every website.",
+    )
+    is_active = models.BooleanField(default=True)
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+
+    class Meta:
+        ordering = ["category", "title"]
+
+    def __str__(self):
+        return self.title

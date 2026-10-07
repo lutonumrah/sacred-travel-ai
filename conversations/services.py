@@ -675,3 +675,38 @@ def book_from_chat(
         request=request,
     )
     return booking, created
+
+
+# --------------------------------------------------------------------------
+# Knowledge base
+# --------------------------------------------------------------------------
+
+
+def save_knowledge_article(*, article, actor, request=None):
+    created = article.pk is None
+    article.updated_by = actor
+    article.save()
+    log_audit(
+        actor=actor,
+        action="knowledge.create" if created else "knowledge.update",
+        entity=article,
+        metadata={
+            "title": article.title,
+            "category": article.category,
+            "website": article.website_id,
+            "is_active": article.is_active,
+        },
+        request=request,
+    )
+    return article
+
+
+def delete_knowledge_article(*, article, actor, request=None):
+    log_audit(
+        actor=actor,
+        action="knowledge.delete",
+        entity=article,
+        metadata={"title": article.title},
+        request=request,
+    )
+    article.delete()

@@ -1,6 +1,6 @@
 from django import forms
 
-from core.forms import DateInput, StyledFormMixin
+from core.forms import DateInput, StyledFormMixin, StyledModelForm
 
 from .models import (
     CLAUDE_MODELS,
@@ -8,6 +8,8 @@ from .models import (
     MODELS_BY_PROVIDER,
     AIProvider,
     ConversationStatus,
+    KnowledgeArticle,
+    KnowledgeCategory,
 )
 
 
@@ -222,3 +224,35 @@ class AISettingsForm(StyledFormMixin, forms.Form):
             obj.updated_by = user
         obj.save()
         return changed
+
+
+class KnowledgeArticleForm(StyledModelForm):
+    class Meta:
+        model = KnowledgeArticle
+        fields = ("title", "category", "website", "keywords", "content", "is_active")
+        widgets = {"content": forms.Textarea(attrs={"rows": 10})}
+        help_texts = {
+            "content": "Write it as you would tell a customer. The AI quotes only what is "
+            "written here, so include the exact fees, deadlines and conditions.",
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        from websites.selectors import list_websites
+
+        self.fields["website"].queryset = list_websites()
+        self.fields["website"].empty_label = "All websites"
+
+
+class KnowledgeFilterForm(StyledFormMixin, forms.Form):
+    q = forms.CharField(required=False, label="Search")
+    category = forms.ChoiceField(
+        required=False, choices=[("", "All categories")] + list(KnowledgeCategory.choices)
+    )
+    website = forms.ModelChoiceField(required=False, queryset=None, empty_label="All websites")
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        from websites.selectors import list_websites
+
+        self.fields["website"].queryset = list_websites()

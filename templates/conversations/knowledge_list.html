@@ -1,0 +1,45 @@
+{% extends "layouts/base.html" %}
+
+{% block page_actions %}
+  <a class="btn" href="{% url 'conversations:knowledge_create' %}">Add article</a>
+{% endblock %}
+
+{% block content %}
+  <ul class="messages"><li class="info">
+    Active articles are given to the AI with every chat on their website (articles for “All websites” go to every site).
+    The AI answers policy and FAQ questions only from these — anything not written here, it says it does not know and offers a consultant.
+    {% if not ai_active %}With no AI key configured, the rule-based replies answer a question that clearly matches an article's title or keywords.{% endif %}
+  </li></ul>
+  {% include "partials/_filters.html" %}
+  <div class="panel">
+    <div class="panel-head"><h2>{{ total }} article{{ total|pluralize }}</h2></div>
+    <div class="table-wrap">
+      <table class="data">
+        <thead><tr><th>Title</th><th>Category</th><th>Website</th><th>Keywords</th><th>Status</th><th>Updated</th><th></th></tr></thead>
+        <tbody>
+          {% for article in page_obj %}
+            <tr>
+              <td><strong><a href="{% url 'conversations:knowledge_edit' article.pk %}">{{ article.title }}</a></strong>
+                <div class="muted small">{{ article.content|truncatechars:120 }}</div></td>
+              <td><span class="badge grey">{{ article.get_category_display }}</span></td>
+              <td class="small">{{ article.website.name|default:"All websites" }}</td>
+              <td class="small">{{ article.keywords|default:"—" }}</td>
+              <td>{% if article.is_active %}<span class="badge ok">Active</span>{% else %}<span class="badge grey">Off</span>{% endif %}</td>
+              <td class="small nowrap">{{ article.updated_at|date:"d M Y" }}{% if article.updated_by %}<div class="muted">{{ article.updated_by.get_username }}</div>{% endif %}</td>
+              <td class="actions">
+                <a class="btn small ghost" href="{% url 'conversations:knowledge_edit' article.pk %}">Edit</a>
+                <form method="post" action="{% url 'conversations:knowledge_delete' article.pk %}" class="inline-form"
+                      onsubmit="return confirm('Delete this article? The AI will stop using it immediately.')">
+                  {% csrf_token %}<button class="btn small danger" type="submit">Delete</button>
+                </form>
+              </td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="7">{% include "partials/_empty.html" with title="No articles yet" hint="Add your cancellation, refund and payment policies first — the AI will not answer those questions without them." %}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% include "partials/_pagination.html" %}
+  </div>
+{% endblock %}

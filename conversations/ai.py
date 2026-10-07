@@ -509,6 +509,74 @@ def _missing_fields(requirements):
     return ", ".join(missing[:-1]) + f" and {missing[-1]}"
 
 
+# --- Knowledge base answers (no model) --------------------------------------
+
+FAQ_STOPWORDS = {
+    "the", "and", "for", "you", "your", "are", "what", "whats", "how", "can", "does",
+    "with", "about", "our", "this", "that", "there", "have", "has", "any", "from", "will",
+    "please", "tell", "know", "want", "need", "is", "do", "my", "me", "i", "a", "an",
+}
+FAQ_ANSWER_CHARS = 600
+
+
+def _stem(word):
+    if len(word) > 4 and word.endswith("ies"):
+        return word[:-3] + "y"
+    if len(word) > 3 and word.endswith("s") and not word.endswith("ss"):
+        return word[:-1]
+    return word
+
+
+def _terms(text):
+    return {
+        _stem(word)
+        for word in re.findall(r"[a-z0-9]+", (text or "").lower())
+        if len(word) >= 3 and word not in FAQ_STOPWORDS
+    }
+
+
+def _faq_score(article, lowered, words):
+    score = 0
+    for phrase in (article.keywords or "").split(","):
+        phrase = phrase.strip().lower()
+        if len(phrase) < 3:
+            continue
+        if " " in phrase:
+            if re.search(rf"\b{re.escape(phrase)}\b", lowered):
+                score += 2
+        elif _stem(phrase) in words:
+            score += 2
+    title_terms = _terms(article.title)
+    hits = len(title_terms & words)
+    if hits >= 2 and hits / len(title_terms) >= 0.6:
+        score += hits
+    return score
+
+
+def match_knowledge(message, articles):
+    """The article a customer message clearly asks about, or None.
+
+    Deterministic: a listed keyword in the message, or most of the article's
+    title words, counts as a clear match. Ties go to the earlier article
+    (website-specific, then by category priority).
+    """
+    lowered = (message or "").lower()
+    words = _terms(message)
+    best, best_score = None, 1
+    for article in articles:
+        score = _faq_score(article, lowered, words)
+        if score > best_score:
+            best, best_score = article, score
+    return best
+
+
+def knowledge_answer(article):
+    content = " ".join(article.content.split())
+    if len(content) > FAQ_ANSWER_CHARS:
+        content = content[:FAQ_ANSWER_CHARS].rsplit(" ", 1)[0] + "…"
+    return content
+
+
 # --------------------------------------------------------------------------
 # Model layer (Claude or Gemini)
 # --------------------------------------------------------------------------
@@ -624,13 +692,22 @@ package, price or availability. If nothing fits, say so and offer a human consul
 - Ask at most one or two questions per reply. Prioritise: destination, travel dates, \
 number of travellers, budget.
 - Keep replies under 90 words and write plain conversational prose, not markdown.
+- Answer questions about policies, cancellations, refunds, payments, documents and other \
+FAQs ONLY from the "Business information" section below, in your own words but without \
+adding anything. If the answer is not there, say you do not have that information and \
+offer to connect the customer with a travel consultant. Never invent, guess or generalise \
+a policy, fee, deadline or rule.
 - Set should_handoff to true if the customer asks for a human, is upset, wants a refund \
-or a cancellation, or asks something you cannot answer from the inventory.
+or a cancellation, or asks something you cannot answer from the inventory or the \
+business information.
 - In `requirements`, carry forward everything already known and add anything new. Use \
 empty string, 0 or an empty list for anything still unknown. Dates are YYYY-MM-DD.
 - Record hotel, food, car and trip-style wishes in `requirements.preferences` only when \
 the customer actually states them.
 - In `recommended_ids`, return the ids of inventory items you referenced, best first.
+
+Business information you may use:
+{knowledge}
 
 Known so far about this trip: {known}
 
@@ -684,9 +761,37 @@ def _inventory_block(items):
     return "\n".join(lines)
 
 
-def _system_prompt(*, brand, requirements, inventory):
+def knowledge_block(articles, budget=None):
+    """The knowledge base as prompt text, capped at `budget` characters.
+
+    `articles` arrive in priority order (see `selectors.knowledge_for_website`);
+    whatever does not fit is left out, the last one that partly fits is cut.
+    """
+    budget = budget or getattr(settings, "AI_KNOWLEDGE_MAX_CHARS", 6000)
+    parts, used = [], 0
+    for article in articles:
+        remaining = budget - used
+        if remaining < 200:
+            break
+        block = (
+            f"### {article.title} ({article.get_category_display()})\n"
+            f"{article.content.strip()}"
+        )
+        if len(block) > remaining:
+            block = block[: remaining - 1].rstrip() + "…"
+        parts.append(block)
+        used += len(block) + 2
+    if not parts:
+        return "(none — you have no business information beyond the inventory)"
+    return "\n\n".join(parts)
+
+
+def _system_prompt(*, brand, requirements, inventory, knowledge=()):
+    # Stable parts first (brand, rules, business information), per-turn parts
+    # last, so the prompt prefix stays identical between turns.
     return SYSTEM_PROMPT.format(
         brand=brand,
+        knowledge=knowledge_block(knowledge),
         known=json.dumps(requirements, default=str) if requirements else "nothing yet",
         inventory=_inventory_block(inventory),
     )
@@ -850,10 +955,12 @@ def _ask_gemini(config, *, system, requirements, history, message):
         return None
 
 
-def _ask_model(*, brand, requirements, inventory, history, message):
+def _ask_model(*, brand, requirements, inventory, history, message, knowledge=()):
     """Ask the configured AI for this turn. Returns (answer, engine) or (None, "")."""
     config = resolve_config()
-    system = _system_prompt(brand=brand, requirements=requirements, inventory=inventory)
+    system = _system_prompt(
+        brand=brand, requirements=requirements, inventory=inventory, knowledge=knowledge
+    )
     turn = {"system": system, "requirements": requirements, "history": history, "message": message}
     if config is not None and config.provider == AIProvider.GEMINI:
         return _ask_gemini(config, **turn), "gemini"
@@ -917,10 +1024,14 @@ def generate_reply(*, conversation, message, history=None):
     if website:
         brand = website.brand_name or website.name
 
-    requirements = extract_requirements(message, conversation.requirements or {})
+    from .selectors import knowledge_for_website
+
+    previous = conversation.requirements or {}
+    requirements = extract_requirements(message, previous)
     contact = extract_contact(message)
     inventory = match_inventory(requirements, website=website, limit=6)
     handoff, handoff_reason = detect_handoff(message)
+    knowledge = knowledge_for_website(website)
 
     answer, engine = _ask_model(
         brand=brand,
@@ -928,6 +1039,7 @@ def generate_reply(*, conversation, message, history=None):
         inventory=inventory,
         history=history or [],
         message=message,
+        knowledge=knowledge,
     )
 
     if answer:
@@ -957,8 +1069,18 @@ def generate_reply(*, conversation, message, history=None):
         )
 
     recommendations = inventory[:3]
+    reply = compose_rule_reply(message, requirements, recommendations, brand)
+    article = match_knowledge(message, knowledge)
+    if article is not None:
+        # A policy / FAQ question: answer it from the knowledge base. Options are
+        # only repeated when this very message asked about a new destination.
+        if recommendations and requirements.get("destination") != previous.get("destination"):
+            reply = f"{knowledge_answer(article)}\n\n{reply}"
+        else:
+            reply = knowledge_answer(article)
+            recommendations = []
     return AIResult(
-        reply=compose_rule_reply(message, requirements, recommendations, brand),
+        reply=reply,
         requirements=requirements,
         recommendations=recommendations,
         should_handoff=handoff,

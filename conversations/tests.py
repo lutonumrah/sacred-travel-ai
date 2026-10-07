@@ -1481,6 +1481,202 @@ class StaffBookingFromChatTests(PublicWidgetFixture):
 # Batch 4: live inbox, knowledge base, source attribution
 # --------------------------------------------------------------------------
 
+from .models import KnowledgeArticle, KnowledgeCategory  # noqa: E402
+from .selectors import knowledge_for_website  # noqa: E402
+
+
+class KnowledgeFixture(TestCase):
+    def setUp(self):
+        self.website = Website.objects.create(
+            name="Main", domain="main.com", source_identifier="main"
+        )
+        self.other_site = Website.objects.create(
+            name="Other", domain="other.com", source_identifier="other"
+        )
+        self.general = KnowledgeArticle.objects.create(
+            title="Cancellation policy",
+            category=KnowledgeCategory.CANCELLATION,
+            content="Cancel up to 7 days before travel for a full refund, minus a 5% fee.",
+            keywords="cancel, cancellation, refund",
+        )
+        self.local = KnowledgeArticle.objects.create(
+            title="Payment methods",
+            category=KnowledgeCategory.PAYMENT,
+            content="Main accepts UPI, cards and net banking. EMI on orders over 50,000.",
+            keywords="emi, upi, pay",
+            website=self.website,
+        )
+        self.foreign = KnowledgeArticle.objects.create(
+            title="Visa help",
+            category=KnowledgeCategory.TRAVEL_INFO,
+            content="OTHER-SITE-ONLY visa desk details.",
+            keywords="visa",
+            website=self.other_site,
+        )
+        KnowledgeArticle.objects.create(
+            title="Old policy",
+            category=KnowledgeCategory.POLICY,
+            content="RETIRED text that must never reach the AI.",
+            is_active=False,
+        )
+        self.conversation = Conversation.objects.create(session_key="kb1", website=self.website)
+
+
+class KnowledgeSelectionTests(KnowledgeFixture):
+    def test_site_articles_come_first_then_shared_ones(self):
+        self.assertEqual(
+            knowledge_for_website(self.website), [self.local, self.general]
+        )
+        self.assertEqual(knowledge_for_website(None), [self.general])
+
+    def test_the_prompt_block_is_capped(self):
+        KnowledgeArticle.objects.create(
+            title="Long FAQ", category=KnowledgeCategory.FAQ, content="x" * 20000
+        )
+        block = ai.knowledge_block(knowledge_for_website(self.website), budget=6000)
+        self.assertLessEqual(len(block), 6000)
+        # Higher-priority articles survive the cut.
+        self.assertIn("Payment methods", block)
+        self.assertIn("Cancellation policy", block)
+
+
+@override_settings(ANTHROPIC_API_KEY="", GEMINI_API_KEY="", AI_MODEL="claude-opus-5-5")
+class KnowledgeInPromptTests(KnowledgeFixture):
+    def _claude(self):
+        block = mock.Mock(type="text", text=json.dumps(GOOD_ANSWER))
+        response = mock.Mock(content=[block], stop_reason="end_turn")
+        client = mock.Mock()
+        client.messages.create.return_value = response
+        client.beta.messages.create.return_value = response
+        return client
+
+    def test_claude_gets_this_websites_knowledge_and_the_guardrails(self):
+        client = self._claude()
+        with mock.patch.object(ai, "_client", return_value=client):
+            ai.generate_reply(conversation=self.conversation, message="Can I cancel?")
+        system = client.beta.messages.create.call_args.kwargs["system"]
+        self.assertIn("Business information you may use", system)
+        self.assertIn(self.general.content, system)
+        self.assertIn(self.local.content, system)
+        self.assertNotIn("OTHER-SITE-ONLY", system)
+        self.assertNotIn("RETIRED", system)
+        self.assertIn("ONLY from the \"Business information\" section", system)
+        self.assertIn("Never invent", system)
+        # Stable business information sits before the per-turn parts.
+        self.assertLess(
+            system.index("Business information"), system.index("Known so far about this trip")
+        )
+
+    def test_gemini_gets_the_other_websites_knowledge_only_there(self):
+        AISettings.objects.create(
+            provider="gemini", model="gemini-3.8-flash", gemini_api_key="g-key"
+        )
+        reply = {
+            "candidates": [
+                {"content": {"parts": [{"text": json.dumps(GOOD_ANSWER)}]}, "finishReason": "STOP"}
+            ]
+        }
+        other_chat = Conversation.objects.create(session_key="kb2", website=self.other_site)
+        with mock.patch.object(ai, "_gemini_request", return_value=reply) as call:
+            ai.generate_reply(conversation=other_chat, message="Do I need a visa?")
+        system = call.call_args.args[2]["systemInstruction"]["parts"][0]["text"]
+        self.assertIn("OTHER-SITE-ONLY", system)
+        self.assertIn(self.general.content, system)
+        self.assertNotIn(self.local.content, system)
+
+    def test_no_articles_tells_the_model_it_has_none(self):
+        KnowledgeArticle.objects.all().delete()
+        client = self._claude()
+        with mock.patch.object(ai, "_client", return_value=client):
+            ai.generate_reply(conversation=self.conversation, message="hello")
+        self.assertIn("(none", client.beta.messages.create.call_args.kwargs["system"])
+
+
+@override_settings(ANTHROPIC_API_KEY="", GEMINI_API_KEY="")
+class KnowledgeRulesEngineTests(KnowledgeFixture):
+    def test_a_keyword_match_is_answered_from_the_article(self):
+        result = ai.generate_reply(conversation=self.conversation, message="Do you offer EMI?")
+        self.assertEqual(result.engine, "rules")
+        self.assertIn("EMI on orders over 50,000", result.reply)
+        self.assertEqual(result.recommendations, [])
+
+    def test_a_title_match_is_answered_too(self):
+        result = ai.generate_reply(
+            conversation=self.conversation, message="What is your cancellation policy please?"
+        )
+        self.assertIn("full refund", result.reply)
+
+    def test_articles_of_another_website_are_not_used(self):
+        result = ai.generate_reply(conversation=self.conversation, message="visa?")
+        self.assertNotIn("OTHER-SITE-ONLY", result.reply)
+
+    def test_weak_overlap_is_not_an_answer(self):
+        self.assertIsNone(ai.match_knowledge("methods", knowledge_for_website(self.website)))
+        self.assertIsNone(ai.match_knowledge("hello there", knowledge_for_website(self.website)))
+
+    def test_long_articles_are_shortened(self):
+        self.local.content = "word " * 400
+        self.local.save()
+        result = ai.generate_reply(conversation=self.conversation, message="UPI accepted?")
+        self.assertLessEqual(len(result.reply), ai.FAQ_ANSWER_CHARS + 1)
+
+    def test_the_widget_answers_an_faq(self):
+        from django.core.cache import cache
+
+        cache.clear()
+        key = issue_api_key(website=self.website)
+        response = self.client.post(
+            reverse("api_conversations:widget_chat"),
+            {"key": key.public_key, "message": "can I pay with UPI?"},
+            content_type="application/json",
+        )
+        self.assertIn("Main accepts UPI", response.json()["data"]["reply"]["content"])
+
+
+class KnowledgeAdminPageTests(KnowledgeFixture):
+    def test_managers_can_add_edit_and_delete_articles(self):
+        manager = User.objects.create_user("mgr", password="pw", role="manager")
+        self.client.force_login(manager)
+        self.assertContains(self.client.get(reverse("conversations:knowledge")), "Payment methods")
+        response = self.client.post(
+            reverse("conversations:knowledge_create"),
+            {
+                "title": "Baggage",
+                "category": "travel_info",
+                "website": "",
+                "keywords": "luggage, baggage",
+                "content": "15 kg per person.",
+                "is_active": "on",
+            },
+        )
+        self.assertRedirects(response, reverse("conversations:knowledge"))
+        article = KnowledgeArticle.objects.get(title="Baggage")
+        self.assertEqual(article.updated_by, manager)
+        self.assertIsNone(article.website)
+        self.client.post(
+            reverse("conversations:knowledge_edit", args=[article.pk]),
+            {"title": "Baggage", "category": "travel_info", "content": "20 kg.", "is_active": ""},
+        )
+        article.refresh_from_db()
+        self.assertEqual(article.content, "20 kg.")
+        self.assertFalse(article.is_active)
+        self.client.post(reverse("conversations:knowledge_delete", args=[article.pk]))
+        self.assertFalse(KnowledgeArticle.objects.filter(pk=article.pk).exists())
+        self.assertTrue(AuditLog.objects.filter(action="knowledge.delete").exists())
+
+    def test_employees_are_turned_away(self):
+        agent = User.objects.create_user("agent", password="pw", role="employee")
+        self.client.force_login(agent)
+        for url in (
+            reverse("conversations:knowledge"),
+            reverse("conversations:knowledge_create"),
+            reverse("conversations:knowledge_edit", args=[self.general.pk]),
+        ):
+            self.assertRedirects(self.client.get(url), reverse("dashboard:overview"))
+        self.client.post(reverse("conversations:knowledge_delete", args=[self.general.pk]))
+        self.assertTrue(KnowledgeArticle.objects.filter(pk=self.general.pk).exists())
+
+
 class AttributionFlowTests(PublicWidgetFixture):
     ATTRIBUTION = {
         "utm_source": "google",

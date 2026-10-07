@@ -10,6 +10,12 @@ urlpatterns = [
     path("widget/", views.WidgetPreviewView.as_view(), name="widget_preview"),
     path("ai-settings/", views.AISettingsView.as_view(), name="ai_settings"),
     path("ai-settings/test/", views.AISettingsTestView.as_view(), name="ai_settings_test"),
+    path("knowledge/", views.KnowledgeListView.as_view(), name="knowledge"),
+    path("knowledge/add/", views.KnowledgeCreateView.as_view(), name="knowledge_create"),
+    path("knowledge/<int:pk>/edit/", views.KnowledgeUpdateView.as_view(), name="knowledge_edit"),
+    path(
+        "knowledge/<int:pk>/delete/", views.KnowledgeDeleteView.as_view(), name="knowledge_delete"
+    ),
     path("<int:pk>/", views.ConversationDetailView.as_view(), name="detail"),
     path("<int:pk>/reply/", views.ConversationReplyView.as_view(), name="reply"),
     path("<int:pk>/take-over/", views.ConversationTakeOverView.as_view(), name="take_over"),

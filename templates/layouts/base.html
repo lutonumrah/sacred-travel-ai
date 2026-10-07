@@ -49,6 +49,7 @@
         {% if user.is_manager %}
           <a href="{% url 'dashboard:reports' %}" class="{% if active_nav == 'reports' %}active{% endif %}">Reports</a>
           <a href="{% url 'dashboard:analytics' %}" class="{% if active_nav == 'analytics' %}active{% endif %}">Analytics</a>
+          <a href="{% url 'conversations:knowledge' %}" class="{% if active_nav == 'knowledge' %}active{% endif %}">Knowledge Base</a>
         {% endif %}
         {% if user.is_admin %}
           <a href="{% url 'accounts:users' %}" class="{% if active_nav == 'users' %}active{% endif %}">Users &amp; Roles</a>

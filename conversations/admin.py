@@ -1,6 +1,13 @@
 from django.contrib import admin
 
-from .models import AISettings, Conversation, ConversationHandoff, Message, Recommendation
+from .models import (
+    AISettings,
+    Conversation,
+    ConversationHandoff,
+    KnowledgeArticle,
+    Message,
+    Recommendation,
+)
 
 
 class MessageInline(admin.TabularInline):
@@ -68,3 +75,15 @@ class AISettingsAdmin(admin.ModelAdmin):
 
     def has_delete_permission(self, request, obj=None):
         return False
+
+
+@admin.register(KnowledgeArticle)
+class KnowledgeArticleAdmin(admin.ModelAdmin):
+    list_display = ("title", "category", "website", "is_active", "updated_by", "updated_at")
+    list_filter = ("category", "is_active", "website")
+    search_fields = ("title", "content", "keywords")
+    readonly_fields = ("updated_by", "created_at", "updated_at")
+
+    def save_model(self, request, obj, form, change):
+        obj.updated_by = request.user
+        super().save_model(request, obj, form, change)

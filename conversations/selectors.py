@@ -1,6 +1,12 @@
 from django.db.models import Count, Max, Q
 
-from .models import Conversation, ConversationStatus, MessageSender
+from .models import (
+    Conversation,
+    ConversationStatus,
+    KnowledgeArticle,
+    KnowledgeCategory,
+    MessageSender,
+)
 
 
 def visible_conversations(user):
@@ -172,3 +178,54 @@ def widget_bookings(conversation, request=None, *, bookings=None):
             }
         )
     return rows
+
+
+# --------------------------------------------------------------------------
+# Knowledge base
+# --------------------------------------------------------------------------
+
+# Policies first: if the prompt budget runs out, travel tips go, not the refund rules.
+KNOWLEDGE_PRIORITY = [
+    KnowledgeCategory.POLICY,
+    KnowledgeCategory.CANCELLATION,
+    KnowledgeCategory.PAYMENT,
+    KnowledgeCategory.FAQ,
+    KnowledgeCategory.TRAVEL_INFO,
+    KnowledgeCategory.OTHER,
+]
+
+
+def list_knowledge(*, q="", category="", website=None):
+    queryset = KnowledgeArticle.objects.select_related("website", "updated_by")
+    if q:
+        queryset = queryset.filter(
+            Q(title__icontains=q) | Q(content__icontains=q) | Q(keywords__icontains=q)
+        )
+    if category:
+        queryset = queryset.filter(category=category)
+    if website:
+        queryset = queryset.filter(Q(website=website) | Q(website__isnull=True))
+    return queryset
+
+
+def knowledge_for_website(website):
+    """Active articles the AI may use for `website`, in the order they are offered.
+
+    This website's own articles come before the ones shared by every website,
+    then by category priority, so a site can override a general policy.
+    """
+    queryset = KnowledgeArticle.objects.filter(is_active=True)
+    if website is not None:
+        queryset = queryset.filter(Q(website=website) | Q(website__isnull=True))
+    else:
+        queryset = queryset.filter(website__isnull=True)
+    rank = {category: index for index, category in enumerate(KNOWLEDGE_PRIORITY)}
+    return sorted(
+        queryset,
+        key=lambda article: (
+            0 if article.website_id else 1,
+            rank.get(article.category, len(rank)),
+            article.title.lower(),
+            article.pk,
+        ),
+    )

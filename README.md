@@ -96,6 +96,16 @@ layer retrieved, so **it cannot invent a hotel, a price or availability**. Any
 failure — no key, no network, malformed output, a refusal — falls back to the
 templated reply. The transcript records which engine answered each turn.
 
+**Knowledge base (guardrails).** Managers keep policies, cancellation and
+payment terms, FAQs and travel information under **Knowledge Base**, per
+website or for all of them. Active articles for the chat's website (its own
+first, then shared ones, policies before tips; capped at ~6,000 characters) go
+into the model's instructions as *Business information you may use*, and the
+model is told to answer policy questions only from it — if the answer is not
+there, it says so and offers a consultant, and never invents a policy. Without
+a model, the rule engine answers a question that clearly matches an article's
+title or keywords with that article.
+
 **Lead capture.** As soon as the chat yields either a destination or a contact
 detail, a `Lead` is created (source: AI Chat) and linked to the conversation.
 Later turns enrich that same lead rather than creating duplicates, and a

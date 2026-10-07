@@ -21,9 +21,17 @@ from .forms import (
     ConversationAssignForm,
     HandoffForm,
     InboxFilterForm,
+    KnowledgeArticleForm,
+    KnowledgeFilterForm,
     StaffBookForm,
 )
-from .models import AISettings, Conversation, ConversationStatus, Recommendation
+from .models import (
+    AISettings,
+    Conversation,
+    ConversationStatus,
+    KnowledgeArticle,
+    Recommendation,
+)
 
 
 class InboxView(SalesRequiredMixin, TemplateView):
@@ -330,3 +338,57 @@ class AISettingsTestView(AdminRequiredMixin, View):
             ok, message = ai.check_connection(config)
             (django_messages.success if ok else django_messages.error)(request, message)
         return redirect("conversations:ai_settings")
+
+
+class KnowledgeListView(ManagerRequiredMixin, TemplateView):
+    template_name = "conversations/knowledge_list.html"
+    page_title = "Knowledge Base"
+    page_subtitle = "Policies, FAQs and travel information the AI may quote — and nothing else."
+    active_nav = "knowledge"
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        form = KnowledgeFilterForm(self.request.GET or None)
+        data = form.cleaned_data if form.is_bound and form.is_valid() else {}
+        queryset = selectors.list_knowledge(
+            q=data.get("q", "") or "",
+            category=data.get("category", "") or "",
+            website=data.get("website"),
+        )
+        ctx["filter_form"] = form
+        ctx["page_obj"] = paginate(queryset, self.request.GET.get("page"))
+        ctx["total"] = queryset.count()
+        ctx["ai_active"] = ai.resolve_config() is not None
+        return ctx
+
+
+class _KnowledgeSaveMixin:
+    model = KnowledgeArticle
+    form_class = KnowledgeArticleForm
+    template_name = "conversations/knowledge_form.html"
+    active_nav = "knowledge"
+
+    def form_valid(self, form):
+        self.object = services.save_knowledge_article(
+            article=form.save(commit=False), actor=self.request.user, request=self.request
+        )
+        django_messages.success(self.request, f"“{self.object.title}” saved.")
+        return redirect(reverse("conversations:knowledge"))
+
+
+class KnowledgeCreateView(ManagerRequiredMixin, _KnowledgeSaveMixin, CreateView):
+    page_title = "Add Knowledge Article"
+    page_subtitle = "A policy, FAQ answer or travel fact the AI may use in chats."
+
+
+class KnowledgeUpdateView(ManagerRequiredMixin, _KnowledgeSaveMixin, UpdateView):
+    page_title = "Edit Knowledge Article"
+    page_subtitle = "Changes apply to the very next chat message."
+
+
+class KnowledgeDeleteView(ManagerRequiredMixin, View):
+    def post(self, request, pk):
+        article = get_object_or_404(KnowledgeArticle, pk=pk)
+        services.delete_knowledge_article(article=article, actor=request.user, request=request)
+        django_messages.success(request, f"“{article.title}” deleted.")
+        return redirect("conversations:knowledge")
