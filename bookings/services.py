@@ -815,7 +815,7 @@ def booking_from_recommendation(
     from crm import services as crm_services
     from crm.models import LeadStatus
     from conversations.models import MessageSender
-    from conversations.services import post_message
+    from conversations.services import post_message, public_staff_name
     from inventory.selectors import get_inventory_object, is_hidden_on
 
     conversation = recommendation.conversation
@@ -890,8 +890,11 @@ def booking_from_recommendation(
     emails.send_payment_link(booking=booking, actor=actor)
 
     staff = actor if (actor and getattr(actor, "is_authenticated", False)) else None
-    who = f"{staff.get_username()} booked {item.name} for the customer" if staff else (
-        f"Customer selected {item.name}"
+    # The widget shows system notes to the customer: no staff usernames here.
+    who = (
+        f"{public_staff_name(staff)} booked {item.name} for the customer"
+        if staff
+        else f"Customer selected {item.name}"
     )
     post_message(
         conversation=conversation,

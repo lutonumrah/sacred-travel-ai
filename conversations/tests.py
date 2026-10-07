@@ -1462,7 +1462,9 @@ class StaffBookingFromChatTests(PublicWidgetFixture):
         self.assertEqual(booking.created_by, self.agent)
         self.assertTrue(booking.payment_token)
         note = self.conversation.messages.filter(sender_type=MessageSender.SYSTEM).last()
-        self.assertIn("agent booked Palm Stay", note.content)
+        # The customer reads this note in the widget: no login usernames.
+        self.assertIn("A travel consultant booked Palm Stay", note.content)
+        self.assertNotIn(self.agent.username, note.content)
 
     def test_another_agents_chat_is_out_of_reach(self):
         self.client.force_login(User.objects.create_user("x", password="pw", role="employee"))

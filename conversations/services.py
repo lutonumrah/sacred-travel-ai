@@ -381,6 +381,15 @@ def request_handoff(*, conversation, reason="", actor=None, request=None):
     return conversation
 
 
+def public_staff_name(user):
+    """How a staff member is named in messages the customer can read.
+
+    Never the login username (half of the credentials): the first name the
+    widget already shows on agent replies, or a neutral label.
+    """
+    return (getattr(user, "first_name", "") or "").strip() or "A travel consultant"
+
+
 def take_over(*, conversation, user, reason="", request=None):
     """A human agent claims the chat; the AI stops replying."""
     conversation.status = ConversationStatus.HUMAN_ACTIVE
@@ -392,7 +401,7 @@ def take_over(*, conversation, user, reason="", request=None):
     post_message(
         conversation=conversation,
         sender_type=MessageSender.SYSTEM,
-        content=f"{user.get_username()} joined the chat.",
+        content=f"{public_staff_name(user)} joined the chat.",
     )
     log_audit(
         actor=user,
