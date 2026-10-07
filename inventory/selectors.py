@@ -470,3 +470,43 @@ def items_using_destination(destination, *, include_archived=True):
     return found
 
 
+def inventory_overview(*, recent=8):
+    """The inventory role's dashboard: stock per kind, what is hidden, recent edits."""
+    kinds = {}
+    for kind, model in MODEL_BY_TYPE.items():
+        live = model.objects.filter(is_deleted=False)
+        kinds[kind] = {
+            "active": live.filter(is_active=True).count(),
+            "inactive": live.filter(is_active=False).count(),
+            "archived": model.objects.filter(is_deleted=True).count(),
+        }
+    destinations = Destination.objects.filter(is_deleted=False)
+    updated = []
+    for kind, model in MANAGED_MODELS.items():
+        for obj in model.objects.order_by("-updated_at")[:recent]:
+            updated.append(
+                {
+                    "kind": kind,
+                    "id": obj.pk,
+                    "name": obj.name,
+                    "updated_at": obj.updated_at,
+                    "is_active": obj.is_active,
+                    "is_deleted": obj.is_deleted,
+                }
+            )
+    updated.sort(key=lambda row: row["updated_at"], reverse=True)
+    return {
+        "counts": kinds,
+        "destinations": {
+            "active": destinations.filter(is_active=True).count(),
+            "inactive": destinations.filter(is_active=False).count(),
+            "archived": Destination.objects.filter(is_deleted=True).count(),
+        },
+        # Items switched off for one website (visibility rules), and inactive stock.
+        "hidden_on_websites": InventoryWebsiteVisibility.objects.filter(is_visible=False).count(),
+        "inactive_total": sum(row["inactive"] for row in kinds.values()),
+        "offers_valid_today": offers_valid_for()
+        .filter(hotel__is_deleted=False, hotel__is_active=True)
+        .count(),
+        "recently_updated": updated[:recent],
+    }

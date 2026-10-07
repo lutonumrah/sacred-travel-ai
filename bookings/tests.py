@@ -1375,3 +1375,46 @@ class BookingStatusChoiceTests(BookingFixture):
         self.assertEqual((draft.status, paid.status), ("pending", "confirmed"))
 
 
+class RoleButtonTests(BookingFixture):
+    def test_employees_do_not_see_cancel_simulate_or_csv_export(self):
+        booking = self.make_booking()
+        services.create_payment_order(booking=booking, actor=self.agent)
+        detail = reverse("bookings:detail", args=[booking.pk])
+        cancel = reverse("bookings:cancel", args=[booking.pk])
+        simulate = reverse("bookings:payment_simulate", args=[booking.pk])
+        export = reverse("dashboard:report_export", args=["bookings"])
+
+        self.client.force_login(self.agent)
+        page = self.client.get(detail)
+        self.assertNotContains(page, cancel)
+        self.assertNotContains(page, simulate)
+        self.assertNotContains(self.client.get(reverse("bookings:list")), export)
+        self.assertNotContains(
+            self.client.get(reverse("crm:leads")),
+            reverse("dashboard:report_export", args=["leads"]),
+        )
+
+        self.client.force_login(self.manager)
+        page = self.client.get(detail)
+        self.assertContains(page, cancel)
+        self.assertContains(page, simulate)
+        self.assertContains(self.client.get(reverse("bookings:list")), export)
+
+    def test_the_status_tiles_count_only_visible_bookings(self):
+        self.make_booking()
+        hidden_lead = Lead.objects.create(
+            customer=self.customer, title="Private", assigned_to=self.manager
+        )
+        services.create_booking(
+            booking=Booking(
+                customer=self.customer, lead=hidden_lead, product_type="package",
+                product_id=self.package.pk, product_name="P", subtotal=Decimal("10"),
+            ),
+            actor=self.manager,
+        )
+        self.client.force_login(self.agent)
+        counts = self.client.get(reverse("bookings:list")).context["status_counts"]
+        self.assertEqual(counts["pending"], 1)
+        self.client.force_login(self.manager)
+        counts = self.client.get(reverse("bookings:list")).context["status_counts"]
+        self.assertEqual(counts["pending"], 2)

@@ -767,7 +767,7 @@ class CustomerArchiveTests(LeadFixture):
         from crm.forms import LeadForm
 
         services.archive_customer(customer=self.customer)
-        self.assertNotIn(self.customer, LeadForm().fields["customer"].queryset)
+        self.assertNotIn(self.customer, LeadForm(user=self.manager).fields["customer"].queryset)
         self.assertNotIn(self.customer, list_customers_for(self.agent))
 
     def test_employees_cannot_archive(self):
@@ -943,6 +943,49 @@ class TeamAssignmentTests(LeadFixture):
         from crm.forms import LeadForm
 
         self.assertEqual(
-            {value for value, _label in LeadForm().fields["source"].choices if value},
+            {value for value, _label in LeadForm(user=self.manager).fields["source"].choices if value},
             {value for value, _label in LeadSource.choices},
         )
+
+
+class PickerScopeTests(LeadFixture):
+    """Lead and follow-up forms only offer records the user can open."""
+
+    def setUp(self):
+        super().setUp()
+        self.secret = Customer.objects.create(first_name="Secret", email="secret@x.com")
+        self.hidden = self.make_lead(customer=self.secret, title="Hidden", assigned_to=self.other)
+        self.mine = self.make_lead(title="Mine", assigned_to=self.agent)
+
+    def test_the_lead_form_lists_only_visible_customers(self):
+        from crm.forms import LeadForm
+
+        self.assertIn(self.customer, LeadForm(user=self.agent).fields["customer"].queryset)
+        self.assertNotIn(self.secret, LeadForm(user=self.agent).fields["customer"].queryset)
+        self.assertIn(self.secret, LeadForm(user=self.manager).fields["customer"].queryset)
+        self.client.force_login(self.agent)
+        self.assertNotContains(self.client.get(reverse("crm:lead_create")), "secret@x.com")
+
+    def test_an_employee_cannot_attach_a_lead_to_a_hidden_customer(self):
+        self.client.force_login(self.agent)
+        self.client.post(
+            reverse("crm:lead_create"),
+            {"title": "Sneaky", "customer": self.secret.pk, "status": "new", "source": "manual",
+             "travelers_count": 1},
+        )
+        self.assertFalse(Lead.objects.filter(title="Sneaky").exists())
+
+    def test_the_follow_up_form_lists_only_visible_leads(self):
+        from crm.forms import FollowUpTaskForm
+
+        leads = FollowUpTaskForm(user=self.agent).fields["lead"].queryset
+        self.assertIn(self.mine, leads)
+        self.assertNotIn(self.hidden, leads)
+        self.client.force_login(self.agent)
+        page = self.client.get(reverse("crm:follow_ups"))
+        self.assertNotContains(page, ">Hidden<")
+        self.client.post(
+            reverse("crm:follow_up_create"),
+            {"lead": self.hidden.pk, "title": "Call", "due_at": "2030-01-01T10:00"},
+        )
+        self.assertFalse(self.hidden.follow_ups.exists())

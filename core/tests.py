@@ -407,3 +407,36 @@ class EntrypointTests(SimpleTestCase):
         calls, stdout = self.run_entrypoint(SKIP_BOOT_TASKS="1", SEED_DEMO="true")
         self.assertEqual(calls, "")
         self.assertIn("started", stdout)
+
+
+class CanOpenTests(TestCase):
+    """Template buttons ask the same role check as the view behind them."""
+
+    def test_can_open_follows_each_views_allowed_roles(self):
+        from core.access import can_open
+
+        users = {
+            role: User.objects.create_user(role, password="x", role=role)
+            for role in ("admin", "manager", "employee", "inventory")
+        }
+        expected = {
+            "bookings:cancel": {"admin", "manager"},
+            "dashboard:report_export": {"admin", "manager"},
+            "websites:list": {"admin", "manager"},
+            "accounts:users": {"admin"},
+            "inventory:archive": {"admin", "manager", "inventory"},
+            "crm:leads": {"admin", "manager", "employee"},
+            "dashboard:overview": {"admin", "manager", "employee", "inventory"},
+        }
+        for url_name, allowed in expected.items():
+            for role, user in users.items():
+                self.assertEqual(can_open(user, url_name), role in allowed, f"{url_name} / {role}")
+
+    def test_anonymous_users_and_unknown_names(self):
+        from django.contrib.auth.models import AnonymousUser
+
+        from core.access import can_open
+
+        self.assertFalse(can_open(AnonymousUser(), "dashboard:overview"))
+        with self.assertRaises(LookupError):
+            can_open(User.objects.create_user("a", password="x", role="admin"), "nope:missing")

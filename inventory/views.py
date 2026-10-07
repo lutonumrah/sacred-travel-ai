@@ -5,6 +5,7 @@ from django.utils.http import url_has_allowed_host_and_scheme
 from django.views import View
 from django.views.generic import CreateView, DeleteView, DetailView, TemplateView, UpdateView
 
+from core.access import can_open
 from core.mixins import InventoryEditorMixin, PageMixin
 from core.selectors import paginate
 
@@ -59,7 +60,8 @@ _LIST_ROUTE = {
 
 
 def _can_edit(user):
-    return user.is_superuser or user.role in ("admin", "manager", "inventory")
+    # The same role check the add / edit / archive views run.
+    return can_open(user, "inventory:archive")
 
 
 class DestinationListView(PageMixin, TemplateView):

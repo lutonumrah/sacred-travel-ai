@@ -4,6 +4,8 @@ from django.contrib import messages
 from django.contrib.auth.mixins import AccessMixin, LoginRequiredMixin
 from django.shortcuts import redirect
 
+from .access import has_role
+
 # Shared with core.permissions so the web and API agree on who gets in.
 ADMIN_ROLES = ("admin",)
 MANAGER_ROLES = ("admin", "manager")
@@ -47,9 +49,7 @@ class RoleRequiredMixin(AccessMixin):
         return super().dispatch(request, *args, **kwargs)
 
     def has_role(self, user):
-        if user.is_superuser or not self.allowed_roles:
-            return True
-        return user.role in self.allowed_roles
+        return has_role(user, self.allowed_roles)
 
 
 class ManagerRequiredMixin(PageMixin, RoleRequiredMixin):

@@ -1,8 +1,9 @@
 {% extends "layouts/base.html" %}
+{% load access %}
 
 {% block page_actions %}
   <a class="btn ghost" href="{% url 'crm:pipeline' %}">Pipeline view</a>
-  <a class="btn ghost" href="{% url 'dashboard:report_export' 'leads' %}">Export CSV</a>
+  {% if user|can_open:"dashboard:report_export" %}<a class="btn ghost" href="{% url 'dashboard:report_export' 'leads' %}">Export CSV</a>{% endif %}
   <a class="btn" href="{% url 'crm:lead_create' %}">Add lead</a>
 {% endblock %}
 

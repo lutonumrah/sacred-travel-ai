@@ -4,7 +4,7 @@ from rest_framework.views import APIView
 
 from bookings import selectors as booking_selectors
 from bookings.serializers import NotificationSerializer
-from core.api import EnvelopeMixin, SuccessResponse
+from core.api import EnvelopeMixin, ErrorResponse, SuccessResponse
 from core.permissions import IsManager
 
 from . import selectors, services
@@ -20,8 +20,28 @@ def _days(request, default=30):
 
 
 class OverviewAPI(APIView):
+    """The dashboard figures for the caller's role (see `selectors.overview_scope`).
+
+    `?scope=business|mine|inventory` asks for a specific view; asking for more
+    than the role allows (an employee for business figures, the inventory role
+    for CRM figures) is a 403.
+    """
+
     def get(self, request):
-        return SuccessResponse(selectors.overview_kpis(days=_days(request)))
+        from inventory.selectors import inventory_overview
+
+        own = selectors.overview_scope(request.user)
+        scope = request.query_params.get("scope") or own
+        if scope not in selectors.ALLOWED_SCOPES[own]:
+            return ErrorResponse(
+                "You do not have permission to view those figures.", status_code=403
+            )
+        if scope == selectors.INVENTORY:
+            return SuccessResponse({"scope": scope, **inventory_overview()})
+        user = request.user if scope == selectors.MINE else None
+        return SuccessResponse(
+            {"scope": scope, **selectors.overview_kpis(days=_days(request), user=user)}
+        )
 
 
 class NotificationsAPI(EnvelopeMixin, generics.ListAPIView):

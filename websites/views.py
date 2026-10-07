@@ -4,7 +4,7 @@ from django.urls import reverse, reverse_lazy
 from django.views import View
 from django.views.generic import CreateView, DetailView, TemplateView, UpdateView
 
-from core.mixins import ManagerRequiredMixin, PageMixin
+from core.mixins import ManagerRequiredMixin
 from core.selectors import paginate
 
 from . import selectors, services
@@ -12,7 +12,7 @@ from .forms import WebsiteAPIKeyForm, WebsiteFilterForm, WebsiteForm
 from .models import Website, WebsiteAPIKey
 
 
-class WebsiteListView(PageMixin, TemplateView):
+class WebsiteListView(ManagerRequiredMixin, TemplateView):
     template_name = "websites/list.html"
     page_title = "Website / Brand Management"
     page_subtitle = "Register websites, brands and source identifiers."
@@ -79,7 +79,7 @@ class WebsiteUpdateView(ManagerRequiredMixin, UpdateView):
         return reverse("websites:detail", args=[self.object.pk])
 
 
-class WebsiteDetailView(PageMixin, DetailView):
+class WebsiteDetailView(ManagerRequiredMixin, DetailView):
     model = Website
     template_name = "websites/detail.html"
     context_object_name = "website"

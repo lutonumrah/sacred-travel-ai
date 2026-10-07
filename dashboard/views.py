@@ -53,21 +53,46 @@ def report_filters(request, default_days=30):
 
 
 class OverviewView(PageMixin, TemplateView):
+    """Business-wide for managers, "My figures" for employees, stock for inventory."""
+
     template_name = "dashboard/overview.html"
     page_title = "Dashboard Overview"
-    page_subtitle = "Leads, conversations, bookings and revenue at a glance."
     active_nav = "dashboard"
+    SUBTITLES = {
+        selectors.BUSINESS: "Leads, conversations, bookings and revenue at a glance.",
+        selectors.MINE: "My figures: the leads, chats and bookings you can work on.",
+        selectors.INVENTORY: "Hotels, cars, packages and destinations at a glance.",
+    }
+
+    def dispatch(self, request, *args, **kwargs):
+        if request.user.is_authenticated:
+            self.scope = selectors.overview_scope(request.user)
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_page_subtitle(self):
+        return self.SUBTITLES[self.scope]
+
+    def get_template_names(self):
+        if self.scope == selectors.INVENTORY:
+            return ["dashboard/overview_inventory.html"]
+        return [self.template_name]
 
     def get_context_data(self, **kwargs):
+        from inventory.selectors import inventory_overview
         from websites.selectors import list_websites
 
         ctx = super().get_context_data(**kwargs)
+        ctx["scope"] = self.scope
+        if self.scope == selectors.INVENTORY:
+            ctx["inventory"] = inventory_overview()
+            return ctx
+        # Employees count only what they can open; managers everything.
+        user = self.request.user if self.scope == selectors.MINE else None
         website = _selected_website(self.request)
         days = _days(self.request)
-        ctx["kpis"] = selectors.overview_kpis(website=website, days=days)
-        ctx["leads_by_day"] = selectors.leads_by_day(days=days, website=website)
-        ctx["leads_by_status"] = selectors.leads_by_status(website=website)
-        ctx["pipeline"] = crm_selectors.lead_status_counts(website=website)
+        ctx["kpis"] = selectors.overview_kpis(website=website, days=days, user=user)
+        ctx["leads_by_day"] = selectors.leads_by_day(days=days, website=website, user=user)
+        ctx["pipeline"] = crm_selectors.lead_status_counts(website=website, user=user)
         ctx["activity"] = selectors.recent_activity(user=self.request.user)
         ctx["websites"] = list_websites(status="active")
         ctx["selected_website"] = website

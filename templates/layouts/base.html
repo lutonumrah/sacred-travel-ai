@@ -1,4 +1,4 @@
-{% load static %}<!DOCTYPE html>
+{% load static access %}<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -18,7 +18,9 @@
       </div>
       <nav class="nav">
         <a href="{% url 'dashboard:overview' %}" class="{% if active_nav == 'dashboard' %}active{% endif %}">Dashboard</a>
-        <a href="{% url 'websites:list' %}" class="{% if active_nav == 'websites' %}active{% endif %}">Websites</a>
+        {% if user|can_open:"websites:list" %}
+          <a href="{% url 'websites:list' %}" class="{% if active_nav == 'websites' %}active{% endif %}">Websites</a>
+        {% endif %}
         <details {% if active_nav == 'inventory' %}open class="active"{% endif %}>
           <summary>Inventory</summary>
           <a href="{% url 'inventory:hotels' %}">Hotels</a>
@@ -28,7 +30,7 @@
           <a href="{% url 'inventory:visibility' %}">Visibility</a>
           <a href="{% url 'inventory:search' %}">Search</a>
         </details>
-        {% if user.is_superuser or user.role != 'inventory' %}
+        {% if user|can_open:"crm:leads" %}
         <details {% if active_nav == 'crm' %}open class="active"{% endif %}>
           <summary>CRM</summary>
           <a href="{% url 'crm:customers' %}">Customers</a>
@@ -46,13 +48,19 @@
           Notifications
           {% if unread_notifications %}<span class="nav-count">{{ unread_notifications }}</span>{% endif %}
         </a>
-        {% if user.is_manager %}
+        {% if user|can_open:"dashboard:reports" %}
           <a href="{% url 'dashboard:reports' %}" class="{% if active_nav == 'reports' %}active{% endif %}">Reports</a>
+        {% endif %}
+        {% if user|can_open:"dashboard:analytics" %}
           <a href="{% url 'dashboard:analytics' %}" class="{% if active_nav == 'analytics' %}active{% endif %}">Analytics</a>
+        {% endif %}
+        {% if user|can_open:"conversations:knowledge" %}
           <a href="{% url 'conversations:knowledge' %}" class="{% if active_nav == 'knowledge' %}active{% endif %}">Knowledge Base</a>
         {% endif %}
-        {% if user.is_admin %}
+        {% if user|can_open:"accounts:users" %}
           <a href="{% url 'accounts:users' %}" class="{% if active_nav == 'users' %}active{% endif %}">Users &amp; Roles</a>
+        {% endif %}
+        {% if user|can_open:"conversations:ai_settings" %}
           <a href="{% url 'conversations:ai_settings' %}" class="{% if active_nav == 'ai_settings' %}active{% endif %}">AI Settings</a>
         {% endif %}
       </nav>

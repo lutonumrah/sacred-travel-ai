@@ -2,6 +2,7 @@
 
 {% block page_actions %}
   <form method="get" style="display:flex;gap:.5rem;align-items:center">
+    {% if scope == 'mine' %}<span class="badge ok" title="Only the leads, chats and bookings you can open">My figures</span>{% endif %}
     <select class="input" name="website" onchange="this.form.submit()">
       <option value="">All websites</option>
       {% for site in websites %}
@@ -39,7 +40,7 @@
       <div class="kpi-hint">{{ kpis.bookings_confirmed }} confirmed · {{ kpis.bookings_pending }} pending</div>
     </div>
     <div class="kpi ok">
-      <div class="kpi-label">Revenue</div>
+      <div class="kpi-label">{% if scope == 'mine' %}My revenue{% else %}Revenue{% endif %}</div>
       <div class="kpi-value">₹{{ kpis.revenue|floatformat:0 }}</div>
       <div class="kpi-hint">Avg ₹{{ kpis.average_booking_value|floatformat:0 }} per booking</div>
     </div>

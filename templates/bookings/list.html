@@ -1,8 +1,9 @@
 {% extends "layouts/base.html" %}
+{% load access %}
 
 {% block page_actions %}
   <a class="btn ghost" href="{% url 'bookings:payments' %}">Payments</a>
-  <a class="btn ghost" href="{% url 'dashboard:report_export' 'bookings' %}">Export CSV</a>
+  {% if user|can_open:"dashboard:report_export" %}<a class="btn ghost" href="{% url 'dashboard:report_export' 'bookings' %}">Export CSV</a>{% endif %}
   <a class="btn" href="{% url 'bookings:create' %}">Create booking</a>
 {% endblock %}
 

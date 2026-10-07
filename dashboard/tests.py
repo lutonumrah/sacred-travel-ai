@@ -553,3 +553,82 @@ class AnalyticsTests(DashboardFixture):
         page = self.client.get(reverse("dashboard:analytics"))
         self.assertContains(page, "Handoffs taken")
         self.assertContains(page, "2m 5s")
+
+
+# --------------------------------------------------------------------------
+# Batch 6: the overview per role
+# --------------------------------------------------------------------------
+
+
+class OverviewScopeTests(DashboardFixture):
+    def setUp(self):
+        super().setUp()
+        self.stock = User.objects.create_user("stock", password="pw", role="inventory")
+        self.make_lead()  # the agent's
+        self.make_lead(assigned_to=self.manager)
+
+    def test_managers_see_business_wide_figures(self):
+        self.client.force_login(self.manager)
+        response = self.client.get(reverse("dashboard:overview"))
+        self.assertEqual(response.context["scope"], "business")
+        self.assertEqual(response.context["kpis"]["leads_total"], 2)
+        self.assertNotContains(response, "My figures")
+
+    def test_employees_see_their_own_figures_labelled_as_such(self):
+        self.client.force_login(self.agent)
+        response = self.client.get(reverse("dashboard:overview"))
+        self.assertEqual(response.context["scope"], "mine")
+        self.assertEqual(response.context["kpis"]["leads_total"], 1)
+        self.assertEqual(sum(response.context["pipeline"].values()), 1)
+        self.assertContains(response, "My figures")
+        self.assertContains(response, "My revenue")
+
+    def test_employee_revenue_counts_only_their_bookings(self):
+        self.settle_a_booking()  # lead assigned to the agent
+        other = User.objects.create_user("other", password="pw", role="employee")
+        self.assertEqual(selectors.overview_kpis(user=other)["revenue"], 0)
+        self.assertEqual(selectors.overview_kpis(user=self.agent)["revenue"], Decimal("21000"))
+
+    def test_the_inventory_role_gets_an_inventory_overview_without_crm_or_revenue(self):
+        Hotel.objects.create(name="Off Inn", base_price=Decimal("1"), is_active=False)
+        self.client.force_login(self.stock)
+        response = self.client.get(reverse("dashboard:overview"))
+        self.assertTemplateUsed(response, "dashboard/overview_inventory.html")
+        inventory = response.context["inventory"]
+        self.assertEqual(inventory["counts"]["hotel"], {"active": 1, "inactive": 1, "archived": 0})
+        self.assertEqual(inventory["inactive_total"], 1)
+        self.assertEqual(inventory["recently_updated"][0]["name"], "Off Inn")
+        self.assertNotIn("kpis", response.context)
+        for text in ("Revenue", "Leads", "Recent bookings"):
+            self.assertNotContains(response, text)
+
+    def test_the_api_scopes_figures_and_refuses_more_than_the_role_allows(self):
+        url = reverse("api_dashboard:overview")
+        self.client.force_login(self.agent)
+        body = self.client.get(url).json()["data"]
+        self.assertEqual((body["scope"], body["leads_total"]), ("mine", 1))
+        self.assertEqual(self.client.get(url, {"scope": "business"}).status_code, 403)
+        self.assertEqual(self.client.get(url, {"scope": "inventory"}).status_code, 200)
+
+        self.client.force_login(self.stock)
+        body = self.client.get(url).json()["data"]
+        self.assertEqual(body["scope"], "inventory")
+        self.assertNotIn("revenue", body)
+        self.assertEqual(body["counts"]["package"]["active"], 1)
+        for scope in ("mine", "business", "nonsense"):
+            response = self.client.get(url, {"scope": scope})
+            self.assertEqual(response.status_code, 403, scope)
+            self.assertFalse(response.json()["success"])
+
+        self.client.force_login(self.manager)
+        body = self.client.get(url, {"scope": "business"}).json()["data"]
+        self.assertEqual((body["scope"], body["leads_total"]), ("business", 2))
+
+    def test_the_sidebar_hides_websites_from_employees_and_inventory(self):
+        for user in (self.agent, self.stock):
+            self.client.force_login(user)
+            page = self.client.get(reverse("dashboard:overview"))
+            self.assertNotContains(page, f'href="{reverse("websites:list")}"')
+        self.client.force_login(self.manager)
+        page = self.client.get(reverse("dashboard:overview"))
+        self.assertContains(page, f'href="{reverse("websites:list")}"')

@@ -1,0 +1,62 @@
+{% extends "layouts/base.html" %}
+
+{% block page_actions %}
+  <a class="btn ghost" href="{% url 'inventory:search' %}">Search inventory</a>
+  <a class="btn" href="{% url 'inventory:hotel_create' %}">Add hotel</a>
+{% endblock %}
+
+{% block content %}
+  <div class="kpi-grid">
+    <div class="kpi accent">
+      <div class="kpi-label">Hotels</div>
+      <div class="kpi-value">{{ inventory.counts.hotel.active }}</div>
+      <div class="kpi-hint">{{ inventory.counts.hotel.inactive }} inactive · {{ inventory.counts.hotel.archived }} archived</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">Cars</div>
+      <div class="kpi-value">{{ inventory.counts.car.active }}</div>
+      <div class="kpi-hint">{{ inventory.counts.car.inactive }} inactive · {{ inventory.counts.car.archived }} archived</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">Packages</div>
+      <div class="kpi-value">{{ inventory.counts.package.active }}</div>
+      <div class="kpi-hint">{{ inventory.counts.package.inactive }} inactive · {{ inventory.counts.package.archived }} archived</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">Destinations</div>
+      <div class="kpi-value">{{ inventory.destinations.active }}</div>
+      <div class="kpi-hint">{{ inventory.destinations.inactive }} inactive · {{ inventory.destinations.archived }} archived</div>
+    </div>
+    <div class="kpi {% if inventory.inactive_total or inventory.hidden_on_websites %}warn{% endif %}">
+      <div class="kpi-label">Hidden items</div>
+      <div class="kpi-value">{{ inventory.inactive_total }}</div>
+      <div class="kpi-hint">inactive · {{ inventory.hidden_on_websites }} hidden on a website (<a href="{% url 'inventory:visibility' %}">rules</a>)</div>
+    </div>
+    <div class="kpi ok">
+      <div class="kpi-label">Room offers valid today</div>
+      <div class="kpi-value">{{ inventory.offers_valid_today }}</div>
+      <div class="kpi-hint">These set tonight's hotel prices</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head"><h2>Recently updated</h2></div>
+    <div class="table-wrap">
+      <table class="data">
+        <thead><tr><th>Item</th><th>Type</th><th>Status</th><th>Updated</th></tr></thead>
+        <tbody>
+          {% for row in inventory.recently_updated %}
+            <tr>
+              <td><strong>{{ row.name }}</strong> <span class="muted small">#{{ row.id }}</span></td>
+              <td>{{ row.kind|capfirst }}</td>
+              <td>{% if row.is_deleted %}<span class="badge grey">Archived</span>{% elif row.is_active %}<span class="badge ok">Active</span>{% else %}<span class="badge grey">Inactive</span>{% endif %}</td>
+              <td class="small nowrap">{{ row.updated_at|date:"d M Y H:i" }}</td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="4">{% include "partials/_empty.html" with title="No inventory yet" hint="Add destinations, then hotels, cars and packages." %}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+{% endblock %}

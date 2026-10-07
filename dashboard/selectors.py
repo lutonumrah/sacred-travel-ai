@@ -53,14 +53,58 @@ QUALIFIED_STATUSES = (
 PAID_BOOKING_STATUSES = (BookingStatus.CONFIRMED,)
 
 
-def overview_kpis(*, website=None, days=30, start=None, end=None):
-    """Headline numbers for the dashboard landing page and the reports page."""
+# What the overview shows each role: managers the whole business, employees the
+# records they can open ("My figures"), the inventory role an inventory summary.
+BUSINESS, MINE, INVENTORY = "business", "mine", "inventory"
+# The scopes each role may ask the overview API for.
+ALLOWED_SCOPES = {BUSINESS: (BUSINESS, INVENTORY), MINE: (MINE, INVENTORY), INVENTORY: (INVENTORY,)}
+
+
+def overview_scope(user):
+    from core.access import has_role
+    from core.mixins import SALES_ROLES
+    from crm.selectors import sees_everything
+
+    if sees_everything(user):
+        return BUSINESS
+    if has_role(user, SALES_ROLES):
+        return MINE
+    return INVENTORY
+
+
+def _scoped(user):
+    """Leads, bookings, chats and follow-ups `user` may see (all of them when None)."""
+    if user is None:
+        return (
+            Lead.objects.filter(is_deleted=False),
+            Booking.objects.all(),
+            Conversation.objects.all(),
+            FollowUpTask.objects.all(),
+        )
+    from bookings.selectors import visible_bookings
+    from conversations.selectors import visible_conversations
+    from crm.selectors import visible_follow_ups, visible_leads
+
+    return (
+        visible_leads(user),
+        visible_bookings(user),
+        visible_conversations(user),
+        visible_follow_ups(user),
+    )
+
+
+def overview_kpis(*, website=None, days=30, start=None, end=None, user=None):
+    """Headline numbers for the dashboard landing page and the reports page.
+
+    With `user`, every figure counts only records that user can open (an
+    employee's "My figures"); without, the whole business.
+    """
     start, end = period(days, start, end)
 
-    leads = Lead.objects.filter(is_deleted=False)
-    bookings = Booking.objects.all()
-    conversations = Conversation.objects.all()
+    leads, bookings, conversations, follow_ups = _scoped(user)
     payments = Payment.objects.filter(status=PaymentStatus.SUCCESS)
+    if user is not None:
+        payments = payments.filter(booking__in=bookings.values("pk"))
     if website:
         leads = leads.filter(website=website)
         bookings = bookings.filter(website=website)
@@ -98,7 +142,7 @@ def overview_kpis(*, website=None, days=30, start=None, end=None):
             value=Avg("total_amount")
         )["value"]
         or 0,
-        "follow_ups_overdue": FollowUpTask.objects.filter(
+        "follow_ups_overdue": follow_ups.filter(
             is_completed=False, due_at__lt=timezone.now()
         ).count(),
         "inventory_counts": {
@@ -109,17 +153,17 @@ def overview_kpis(*, website=None, days=30, start=None, end=None):
     }
 
 
-def _period_leads(*, days, start, end, website):
+def _period_leads(*, days, start, end, website, user=None):
     start, end = period(days, start, end)
-    queryset = _in_period(Lead.objects.filter(is_deleted=False), "created_at", start, end)
+    queryset = _in_period(_scoped(user)[0], "created_at", start, end)
     if website:
         queryset = queryset.filter(website=website)
     return queryset
 
 
-def leads_by_day(*, days=30, website=None, start=None, end=None):
+def leads_by_day(*, days=30, website=None, start=None, end=None, user=None):
     rows = (
-        _period_leads(days=days, start=start, end=end, website=website)
+        _period_leads(days=days, start=start, end=end, website=website, user=user)
         .annotate(day=TruncDate("created_at"))
         .values("day")
         .annotate(total=Count("id"))

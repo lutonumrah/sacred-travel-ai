@@ -8,6 +8,7 @@ from django.urls import reverse
 from django.views import View
 from django.views.generic import CreateView, DetailView, FormView, TemplateView, UpdateView
 
+from core.access import can_open
 from core.attribution import attribution_rows
 from core.mixins import AdminRequiredMixin, ManagerRequiredMixin, SalesRequiredMixin
 from core.selectors import paginate
@@ -145,7 +146,7 @@ class ConversationDetailView(SalesRequiredMixin, DetailView):
         ctx["contact"] = conversation.context or {}
         ctx["attribution_rows"] = attribution_rows(conversation)
         ctx["can_reply"] = conversation.status != ConversationStatus.CLOSED
-        if self.request.user.is_manager:
+        if can_open(self.request.user, "conversations:assign"):
             ctx["assign_form"] = ConversationAssignForm(
                 initial={"assigned_to": conversation.assigned_to_id}
             )

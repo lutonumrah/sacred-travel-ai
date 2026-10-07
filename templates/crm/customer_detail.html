@@ -1,4 +1,5 @@
 {% extends "layouts/base.html" %}
+{% load access %}
 
 {% block page_actions %}
   {% if customer.is_deleted %}
@@ -7,7 +8,7 @@
     </form>
   {% else %}
     <a class="btn ghost" href="{% url 'crm:customer_edit' customer.pk %}">Edit</a>
-    {% if user.is_manager %}
+    {% if user|can_open:"crm:customer_archive" %}
       <form method="post" action="{% url 'crm:customer_archive' customer.pk %}" class="inline-form"
             onsubmit="return confirm('Archive {{ customer.full_name|escapejs }}? Their leads, chats and bookings are kept.')">
         {% csrf_token %}<button class="btn ghost" type="submit">Archive</button>

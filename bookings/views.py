@@ -35,7 +35,7 @@ class BookingListView(SalesRequiredMixin, TemplateView):
         ctx["filter_form"] = form
         ctx["page_obj"] = paginate(queryset, self.request.GET.get("page"))
         ctx["total"] = queryset.count()
-        ctx["status_counts"] = selectors.booking_status_counts()
+        ctx["status_counts"] = selectors.booking_status_counts(user=self.request.user)
         return ctx
 
 

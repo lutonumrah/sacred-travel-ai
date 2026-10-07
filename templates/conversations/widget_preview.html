@@ -1,5 +1,5 @@
 {% extends "layouts/base.html" %}
-{% load static %}
+{% load static access %}
 
 {% block content %}
   <form method="get" class="filter-bar">
@@ -18,12 +18,12 @@
   {% if not website %}
     <div class="panel">
       {% include "partials/_empty.html" with title="No active website" hint="Register a website first — the widget is keyed to one." %}
-      <div class="form-actions"><a class="btn" href="{% url 'websites:create' %}">Add a website</a></div>
+      {% if user|can_open:"websites:create" %}<div class="form-actions"><a class="btn" href="{% url 'websites:create' %}">Add a website</a></div>{% endif %}
     </div>
   {% elif not api_key %}
     <div class="panel">
       {% include "partials/_empty.html" with title="No active widget key" hint="Issue an API key for this website to enable the widget." %}
-      <div class="form-actions"><a class="btn" href="{% url 'websites:detail' website.pk %}">Open website settings</a></div>
+      {% if user|can_open:"websites:detail" %}<div class="form-actions"><a class="btn" href="{% url 'websites:detail' website.pk %}">Open website settings</a></div>{% else %}<p class="muted small">Ask a manager to issue one.</p>{% endif %}
     </div>
   {% else %}
     <div class="panel">
@@ -39,7 +39,7 @@
       </ul>
       <div class="form-actions">
         <a class="btn ghost" href="{% url 'conversations:inbox' %}">Open the inbox</a>
-        <a class="btn ghost" href="{% url 'websites:detail' website.pk %}">Embed snippet</a>
+        {% if user|can_open:"websites:detail" %}<a class="btn ghost" href="{% url 'websites:detail' website.pk %}">Embed snippet</a>{% endif %}
       </div>
     </div>
   {% endif %}

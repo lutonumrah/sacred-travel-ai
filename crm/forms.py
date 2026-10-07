@@ -63,12 +63,15 @@ class LeadForm(StyledModelForm):
             "travel_end": DateInput(),
         }
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, user, **kwargs):
         super().__init__(*args, **kwargs)
         from accounts.selectors import assignable_users
         from websites.selectors import list_websites
 
-        self.fields["customer"].queryset = Customer.objects.filter(is_deleted=False)
+        from .selectors import visible_customers
+
+        # Only people this user may see, or the dropdown leaks every customer's name.
+        self.fields["customer"].queryset = visible_customers(user)
         self.fields["assigned_to"].queryset = assignable_users()
         self.fields["website"].queryset = list_websites(status="active")
 
@@ -155,11 +158,14 @@ class FollowUpTaskForm(StyledModelForm):
         fields = ("lead", "assigned_to", "title", "due_at", "reminder_at", "notes")
         widgets = {"due_at": DateTimeInput(), "reminder_at": DateTimeInput()}
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, user, **kwargs):
         super().__init__(*args, **kwargs)
         from accounts.selectors import assignable_users
 
-        self.fields["lead"].queryset = Lead.objects.filter(is_deleted=False)
+        from .selectors import visible_leads
+
+        # The user's own leads only: also what `clean` relies on to refuse others.
+        self.fields["lead"].queryset = visible_leads(user)
         self.fields["assigned_to"].queryset = assignable_users()
 
     def clean(self):

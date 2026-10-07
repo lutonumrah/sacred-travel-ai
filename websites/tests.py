@@ -116,3 +116,40 @@ class WebsiteAPITests(TestCase):
         self.assertNotIn("secret_key", response.content.decode())
         self.assertNotIn(self.key.secret_key, response.content.decode())
 
+
+
+class WebsiteAccessTests(TestCase):
+    """Widget keys and snippets are for managers and admins only."""
+
+    def setUp(self):
+        self.website = Website.objects.create(
+            name="Main", domain="main.com", source_identifier="main"
+        )
+        self.key = issue_api_key(website=self.website)
+
+    def test_employees_and_inventory_cannot_view_websites(self):
+        for role in ("employee", "inventory"):
+            self.client.force_login(User.objects.create_user(role, password="pw", role=role))
+            for url in (
+                reverse("websites:list"),
+                reverse("websites:detail", args=[self.website.pk]),
+                reverse("websites:edit", args=[self.website.pk]),
+            ):
+                self.assertRedirects(self.client.get(url), reverse("dashboard:overview"))
+            self.client.post(reverse("websites:key_create", args=[self.website.pk]))
+            self.assertEqual(self.website.api_keys.count(), 1)
+
+    def test_managers_and_admins_can(self):
+        for role in ("manager", "admin"):
+            self.client.force_login(User.objects.create_user(role, password="pw", role=role))
+            self.assertContains(self.client.get(reverse("websites:list")), "Main")
+            self.assertContains(
+                self.client.get(reverse("websites:detail", args=[self.website.pk])),
+                self.key.public_key,
+            )
+
+    def test_the_widget_preview_hides_website_links_from_employees(self):
+        self.client.force_login(User.objects.create_user("emp", password="pw", role="employee"))
+        page = self.client.get(reverse("conversations:widget_preview"))
+        self.assertEqual(page.status_code, 200)
+        self.assertNotContains(page, reverse("websites:detail", args=[self.website.pk]))

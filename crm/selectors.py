@@ -230,8 +230,9 @@ def follow_up_buckets(*, user=None, include_completed=False):
     }
 
 
-def lead_status_counts(*, website=None):
-    queryset = Lead.objects.filter(is_deleted=False)
+def lead_status_counts(*, website=None, user=None):
+    """Leads per pipeline status; with `user`, only leads that user can see."""
+    queryset = visible_leads(user) if user is not None else Lead.objects.filter(is_deleted=False)
     if website:
         queryset = queryset.filter(website=website)
     counts = dict(

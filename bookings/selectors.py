@@ -99,8 +99,9 @@ def revenue_total(*, date_from=None, date_to=None, website=None):
     return queryset.aggregate(total=Sum("amount"))["total"] or 0
 
 
-def booking_status_counts(*, website=None):
-    queryset = Booking.objects.all()
+def booking_status_counts(*, website=None, user=None):
+    """Bookings per status; with `user`, only the bookings that user can see."""
+    queryset = visible_bookings(user) if user is not None else Booking.objects.all()
     if website:
         queryset = queryset.filter(website=website)
     from django.db.models import Count

@@ -259,6 +259,11 @@ class LeadCreateView(SalesRequiredMixin, CreateView):
     page_subtitle = "Log a lead from a call, email or walk-in."
     active_nav = "crm"
 
+    def get_form_kwargs(self):
+        kwargs = super().get_form_kwargs()
+        kwargs["user"] = self.request.user
+        return kwargs
+
     def get_initial(self):
         initial = super().get_initial()
         customer_id = self.request.GET.get("customer")
@@ -287,6 +292,11 @@ class LeadUpdateView(SalesRequiredMixin, UpdateView):
 
     def get_queryset(self):
         return selectors.visible_leads(self.request.user)
+
+    def get_form_kwargs(self):
+        kwargs = super().get_form_kwargs()
+        kwargs["user"] = self.request.user
+        return kwargs
 
     def form_valid(self, form):
         lead = form.save(commit=False)
@@ -334,7 +344,7 @@ class LeadDetailView(SalesRequiredMixin, DetailView):
             initial={"assigned_to": lead.assigned_to_id, "assigned_team": lead.assigned_team_id}
         )
         ctx["follow_up_form"] = FollowUpTaskForm(
-            initial={"lead": lead, "assigned_to": lead.assigned_to}
+            initial={"lead": lead, "assigned_to": lead.assigned_to}, user=self.request.user
         )
         return ctx
 
@@ -405,18 +415,14 @@ class FollowUpListView(SalesRequiredMixin, TemplateView):
             user=self.request.user, include_completed=include_completed
         )
         ctx["include_completed"] = include_completed
-        ctx["form"] = FollowUpTaskForm()
+        ctx["form"] = FollowUpTaskForm(user=self.request.user)
         return ctx
 
 
 class FollowUpCreateView(SalesRequiredMixin, View):
     def post(self, request):
-        form = FollowUpTaskForm(request.POST)
-        if form.is_valid() and not selectors.visible_leads(request.user).filter(
-            pk=form.cleaned_data["lead"].pk
-        ).exists():
-            messages.error(request, "Choose one of your leads.")
-        elif form.is_valid():
+        form = FollowUpTaskForm(request.POST, user=request.user)
+        if form.is_valid():
             services.create_follow_up(
                 task=form.save(commit=False), actor=request.user, request=request
             )

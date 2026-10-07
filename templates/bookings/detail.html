@@ -1,4 +1,5 @@
 {% extends "layouts/base.html" %}
+{% load access %}
 
 {% block page_actions %}
   <a class="btn ghost" href="{% url 'bookings:list' %}">All bookings</a>
@@ -69,11 +70,13 @@
             {% if is_live_gateway %}
               <button class="btn" type="button" id="pay-now">Pay with Razorpay</button>
               <span class="muted small">Opens Razorpay Checkout for order {{ pending_payment.razorpay_order_id }}.</span>
-            {% else %}
+            {% elif user|can_open:"bookings:payment_simulate" %}
               <form method="post" action="{% url 'bookings:payment_simulate' booking.pk %}" class="inline-form">
                 {% csrf_token %}<button class="btn" type="submit">Complete simulated payment</button>
               </form>
               <span class="muted small">No Razorpay keys configured — this signs and verifies the payment locally.</span>
+            {% else %}
+              <span class="muted small">Test mode: the customer can complete a simulated payment from their payment link.</span>
             {% endif %}
           </div>
         {% endif %}
@@ -135,7 +138,7 @@
         {% endif %}
       </div>
 
-      {% if booking.status != 'cancelled' and booking.status != 'confirmed' and booking.status != 'refunded' %}
+      {% if booking.status != 'cancelled' and booking.status != 'confirmed' and booking.status != 'refunded' and user|can_open:"bookings:cancel" %}
         <div class="panel">
           <div class="panel-head"><h3>Cancel</h3></div>
           <form method="post" action="{% url 'bookings:cancel' booking.pk %}"
