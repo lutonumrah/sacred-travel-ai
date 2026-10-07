@@ -23,8 +23,8 @@ feature are in [USER_GUIDE.md](USER_GUIDE.md).
 - [ ] 1.2 Sign in with a wrong password → *"Your username and password did not match. Please try again."*
 - [ ] 1.3 Sign in as Admin → the dashboard opens; the sidebar shows **Dashboard, Websites, Inventory, CRM, Conversations, Bookings, Notifications, Reports, Analytics, Knowledge Base, Users & Roles, AI Settings**.
 - [ ] 1.4 Sign in as Manager → same sidebar without **Users & Roles** and **AI Settings**.
-- [ ] 1.5 Sign in as Employee → sidebar shows **Dashboard, Websites, Inventory, CRM, Conversations, Bookings, Notifications** only.
-- [ ] 1.6 Sign in as Inventory User → sidebar shows **Dashboard, Websites, Inventory, Notifications** only.
+- [ ] 1.5 Sign in as Employee → sidebar shows **Dashboard, Inventory, CRM, Conversations, Bookings, Notifications** only (no **Websites**).
+- [ ] 1.6 Sign in as Inventory User → sidebar shows **Dashboard, Inventory, Notifications** only.
 - [ ] 1.7 As Employee, type `/dashboard/reports/` into the address bar → back on the dashboard with *"You do not have permission to open that page."*
 - [ ] 1.8 As Inventory User, type `/crm/leads/` → same permission message.
 - [ ] 1.9 **Logout** (bottom of the sidebar) → back on **Sign in**; opening `/dashboard/` again asks you to sign in.
@@ -44,7 +44,7 @@ feature are in [USER_GUIDE.md](USER_GUIDE.md).
 - [ ] 2.2 The website page shows **Embed the chat widget** with a `<script …widget.js…>` snippet containing that key and colour, and **Website enquiry form** with an HTML form snippet.
 - [ ] 2.3 **Issue new key** → a second key appears; the snippets now show the new key. **Revoke** the old key → its status is **Revoked**.
 - [ ] 2.4 Edit the website, untick **Widget enabled**, save → the **Widget** tile says **Off**; the widget on the test page no longer answers. Tick it again.
-- [ ] 2.5 As Employee, open **Websites** → the list is visible; pressing **Add website** shows the permission message.
+- [ ] 2.5 As Employee (and as Inventory User), there is no **Websites** menu; typing `/websites/` into the address bar → the permission message. On **Conversations → Widget preview** there is no **Embed snippet** link.
 - [ ] 2.6 Archive a throw-away website (**Archive website**, confirm) → it disappears from the list; its leads remain in **CRM → Leads**.
 
 ### Inventory
@@ -60,7 +60,12 @@ feature are in [USER_GUIDE.md](USER_GUIDE.md).
 - [ ] 2.15 **Visibility → Add or update a rule**: your website, **Inventory type** Hotel, **Object id** = the hotel's ID, **Is visible** unticked → **Save rule**. Search Udaipur with that **Website** selected → the hotel is missing; with **All websites** → it is there.
 - [ ] 2.16 Save the same rule with **Is visible** ticked and **Priority** 10 → with that website selected the hotel is listed first.
 - [ ] 2.17 Save a rule with an Object id that does not exist → an error naming the missing ID.
-- [ ] 2.18 As Employee, open **Hotels** → list visible, no **Add hotel** / **Edit** buttons.
+- [ ] 2.18 As Employee, open **Hotels** → list visible, no **Add hotel** / **Edit** / **Archive** buttons.
+- [ ] 2.19 *Offer pricing.* On the Udaipur hotel (base price 6000) add offer *Deluxe saver*, room type *Deluxe*, price 4500, no dates. The **Hotels** list shows **Tonight** 4500. **Search** Udaipur → the hotel shows INR 4,500 per night, *4-star · Deluxe* and *Offer: Deluxe saver*; with **Max price** 5000 it is listed.
+- [ ] 2.20 Edit the offer so **Valid from** is next month → **Tonight** goes back to 6000; **Search** with **Check in** / **Check out** inside next month shows 4500 again. Add a second offer valid next month at 4000 → that one wins for those dates. Untick **Is active** on it → 4500 again.
+- [ ] 2.21 *Archive.* On the car from 2.10 press **Archive** (confirm) → *"… archived. It is hidden from lists, search and the AI …"*; it is gone from **Cars** and **Search**. Tick **Include archived** → it is listed as **Archived** with **Restore** and **Delete permanently**.
+- [ ] 2.22 **Restore** it → back in the list as **Inactive**; **Enable** it. Archive and **Delete permanently** a throw-away hotel that was never booked → gone. Try **Delete permanently** on an archived item that has a booking → *"… has 1 booking and cannot be deleted …"*.
+- [ ] 2.23 **Destinations → Archive** on Udaipur while it has live hotels/cars/packages → refused (*"… Archive or move them first."*). A destination with nothing on it can be archived and then no longer appears in the hotel/car/package **Destination** menus.
 
 ## P3 — CRM: customers, leads, pipeline, follow-ups
 
@@ -141,13 +146,18 @@ feature are in [USER_GUIDE.md](USER_GUIDE.md).
 - [ ] 6.9 Open the payment link again → it shows the booking as confirmed; there is no pay button.
 - [ ] 6.10 On a conversation page, under **Recommended**, use **Book this for the customer** (dates, travellers, **Create booking**) → you land on the new booking; *"… the payment link has been emailed to the customer."*
 - [ ] 6.11 **Bookings → Create booking** by hand: a customer, product type Hotel, **Product id** = an existing hotel ID, dates, subtotal, **Email the payment link to the customer** ticked → **Create booking** → Pending Payment booking with a payment link; an email is listed under **Customer emails**. With a non-existent product ID → *"No hotel exists with ID …"*.
+- [ ] 6.11a Create another hotel booking with **Subtotal** left blank and a **Room offer** chosen → the subtotal is that offer's price × nights; the booking page shows **Room** with the room type and inclusions; the customer's payment page and email show the room. Choosing an offer of a different hotel, or one not valid for the dates, is refused with a message.
+- [ ] 6.11b In the widget, book a hotel that has an offer valid for your dates → the booking is priced at the offer price per night (not the base price) and the booking card shows the room type.
 - [ ] 6.12 On a pending booking, **Copy customer payment link** copies the link. **Issue new link & email customer** (confirm) → *"New payment link issued — valid until …. The old link no longer works. It has been emailed to the customer."*; the old link now shows *"This payment link has expired"*; the new one works.
 - [ ] 6.13 As Manager, **Cancel booking** on a pending booking with a reason → **Cancelled**; the lead goes back to **Interested**; the customer gets *"Booking … cancelled"*. Its payment link can no longer be paid.
-- [ ] 6.14 As Employee, press **Cancel booking** or **Complete simulated payment** → permission message; nothing changes.
+- [ ] 6.14 As Employee, a pending booking shows no **Cancel** panel and no **Complete simulated payment** button (in simulation mode a note says the customer can pay from their link); the bookings and leads lists show no **Export CSV**.
 - [ ] 6.15 *Simulation mode only*: on a pending booking, **Create payment order** → an order row appears; as Manager **Complete simulated payment** → *"Simulated payment captured — booking confirmed."*
 - [ ] 6.16 *Live test keys only*: confirm that **Complete simulated payment** and **Simulate payment (test mode)** no longer appear anywhere.
 - [ ] 6.17 Confirm there is no refund button on a confirmed booking (refunds are made in the Razorpay dashboard — see P8).
 - [ ] 6.18 **Bookings → Payments** lists the payments with order and payment IDs; the **Gateway** tile matches the mode noted in 0.4.
+- [ ] 6.19 *Failed payment, customer retry* (live test keys: pay with a Razorpay failing test card; simulation: ask the developer to send a `payment.failed` test webhook). The booking becomes **Failed** and managers are notified. Open the payment link → *"The last payment attempt did not go through …"* and the pay button. Pay successfully → **Confirmed**; the **Payments** table shows the failed and the successful attempt.
+- [ ] 6.20 *Failed payment, staff retry*: on another Failed booking the booking page shows a warning with the failure reason and **Retry payment (new order)** → a new order row appears and the booking is **Pending Payment** again. If its link had expired, **Issue new link & email customer** sends a working one.
+- [ ] 6.21 The **Status** filter on **Bookings** offers Pending Payment, Confirmed, Cancelled, Failed and Refunded (no Draft or Paid).
 
 ## P7 — Dashboard, notifications, reports, analytics
 
@@ -161,8 +171,11 @@ feature are in [USER_GUIDE.md](USER_GUIDE.md).
 - [ ] 7.8 Reports show **Leads by source**, **Leads by status**, **Bookings by product**, **Top destinations**, **Conversion funnel by website and source**, **By campaign** (your UAT campaign appears), **Revenue by day**.
 - [ ] 7.9 **Leads CSV**, **Bookings CSV**, **Revenue CSV**, **Conversion CSV** each download a CSV that opens in Excel/Sheets with the columns described in the user guide, honouring the website/date filters.
 - [ ] 7.10 **Analytics**: **Website performance** has a row per website (chats, chat→lead %, leads, converted, rate, bookings, paid, revenue); **Employee performance** shows Agent A with the handoff from 5.4 under **Handoffs taken** and an **Avg first response**.
-- [ ] 7.11 As Employee, **Reports**/**Analytics**/CSV links are not available (permission message).
+- [ ] 7.11 As Employee, **Reports**/**Analytics** are not in the sidebar and CSV links are not shown; typing `/dashboard/reports/` gives the permission message.
 - [ ] 7.12 Leave the inbox open as Manager while a customer requests a human → the sidebar **Conversations** badge updates without reloading.
+- [ ] 7.13 As Employee (Agent A), the **Dashboard** shows a **My figures** badge and **My revenue**; the numbers only count Agent A's own/visible leads, chats and bookings (compare with the Manager's dashboard, which is higher if other agents have records).
+- [ ] 7.14 As Inventory User, the **Dashboard** shows the inventory overview (hotels, cars, packages, destinations with inactive/archived counts, **Hidden items**, **Room offers valid today**, **Recently updated**) and no leads, bookings or revenue.
+- [ ] 7.15 Signed in as Employee, open `/api/v1/dashboard/overview/` → `"scope": "mine"`; `/api/v1/dashboard/overview/?scope=business` → an error (403). As Inventory User the first gives `"scope": "inventory"` and `?scope=mine` an error.
 
 ## P8 — AI validation, payments, security and browsers
 
@@ -187,7 +200,7 @@ feature are in [USER_GUIDE.md](USER_GUIDE.md).
 ### Security and permissions
 
 - [ ] 8.13 As Agent B, open URLs of Agent A's lead, chat, booking and follow-up edit page → each is page not found.
-- [ ] 8.14 As Employee, the **Customer** and **Lead** menus on **Create booking** only list records you can see.
+- [ ] 8.14 As Employee, the **Customer** and **Lead** menus on **Create booking**, the **Customer** menu on **Add lead** and the **Lead** menu on a new follow-up only list records you can see.
 - [ ] 8.15 Embed the widget snippet on a page served from a domain that is **not** the website's registered domain → the widget does not work there.
 - [ ] 8.16 After revoking a key (2.3), a page still using it gets no answers.
 - [ ] 8.17 Send messages very quickly in the widget (over 30 a minute) → *"You are sending messages very quickly — please wait a moment."*

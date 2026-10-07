@@ -32,11 +32,11 @@ permission to open that page."*
 
 | Area | Admin | Manager | Employee | Inventory User |
 |---|---|---|---|---|
-| **Dashboard** overview | Yes | Yes | Yes | Yes |
-| **Websites** — view list, embed snippets, keys | Yes | Yes | Yes (view only) | Yes (view only) |
+| **Dashboard** overview | Business-wide | Business-wide | *My figures* | Inventory overview |
+| **Websites** — view list, embed snippets, keys | Yes | Yes | No | No |
 | **Websites** — add, edit, issue/revoke keys, archive | Yes | Yes | No | No |
 | **Inventory** — view hotels, cars, packages, destinations, visibility, search | Yes | Yes | Yes (view only) | Yes |
-| **Inventory** — add, edit, enable/disable, room offers, visibility rules | Yes | Yes | No | Yes |
+| **Inventory** — add, edit, enable/disable, room offers, visibility rules, archive / restore / delete | Yes | Yes | No | Yes |
 | **CRM** (Customers, Leads, Pipeline, Follow-ups) | All records | All records | See "What employees see" below | No access |
 | Archive / restore a customer | Yes | Yes | No | No |
 | **Conversations** (inbox, history, widget preview) | All chats | All chats | Own and unassigned chats | No access |
@@ -71,14 +71,19 @@ the API. Managers and admins see everything.
 
 **Things everyone should know about visibility**
 
-- The **Dashboard** overview figures (leads, revenue, bookings, live chats,
-  overdue follow-ups) are business-wide for every role. The *Recent leads*,
-  *Live conversations* and *Recent bookings* lists underneath are limited to
-  what you can open.
-- An employee can still see some buttons they cannot use — **Export CSV** on the
-  leads and bookings lists, **Cancel booking**, **Complete simulated payment**,
-  and the add/edit/key buttons on the Websites pages. Pressing them shows the
-  permission message; nothing changes.
+- The **Dashboard** overview is business-wide for managers and admins. An
+  employee's overview is labelled **My figures**: every number (leads, revenue,
+  bookings, live chats, overdue follow-ups, the pipeline bars) counts only the
+  records they can open. The Inventory User gets an inventory overview instead
+  (see section 9).
+- Buttons and menu links only appear when your role can use them: **Export
+  CSV**, **Cancel booking**, **Complete simulated payment**, **Assign** on a
+  chat, the Websites menu and the inventory add/edit/archive buttons are hidden
+  from roles that cannot use them. They are worked out from the same check the
+  page itself makes, so a visible button always works.
+- Drop-down lists in forms only offer records you can see: the **Customer**
+  list on a lead, the **Lead** list on a follow-up and the customer / lead lists
+  on a booking.
 - A user marked inactive (**Active** unticked) cannot sign in. A user with
   **Is active employee** unticked can still sign in, but is no longer offered
   for assignment, is left out of manager alerts and does not appear in the
@@ -131,7 +136,9 @@ Click your username at the bottom of the sidebar to open **My Account**.
 
 ## 3. Websites, the chat widget and the enquiry form
 
-Menu: **Websites** (page title *Website / Brand Management*).
+Menu: **Websites** (page title *Website / Brand Management*) — managers and
+admins only. Employees and inventory users do not see the menu: they have no
+need for widget keys or embed snippets.
 
 Each customer-facing website or brand is registered here. The website's
 **Source identifier** tags every chat, lead and booking that comes from it, and
@@ -215,14 +222,15 @@ Menu: **Inventory** → **Hotels**, **Cars**, **Packages**, **Destinations**,
 managers and inventory users see the add/edit buttons.
 
 Inventory is what the AI is allowed to recommend and what customers can book
-from the chat. Only **active** items are recommended.
+from the chat. Only **active**, non-archived items are recommended.
 
 ### Destinations
 
 **Add destination**: **Name**, **Code** (unique slug), **City**, **State**,
 **Country**, **Is active** → **Save destination**. The AI recognises a
 customer's destination only if it matches a destination recorded here, so add
-every place you sell. There is no delete button; untick **Is active** instead.
+every place you sell. A destination you no longer sell can be **archived** (see
+*Archiving and deleting* below) once no live hotel, car or package uses it.
 
 ### Hotels and room offers
 
@@ -231,15 +239,28 @@ every place you sell. There is no delete button; untick **Is active** instead.
 **Check in time**, **Check out time**, **Base price**, **Currency**, **Image**,
 **Is active** → **Save hotel**.
 
-**Base price is the per-night rate.** It is what the AI quotes and what a chat
-booking charges (nightly rate × nights, plus tax).
-
 After saving, open the hotel again with **Edit** to see **Room offers**. **Add an
-offer** (**Title**, **Room type**, **Price**, **Currency**, **Valid from**,
-**Valid to**, **Inclusions**, **Is active**) → **Add offer**. Each offer can be
-edited (**Edit** → **Save offer**) or deleted (**Remove**). Room offers are a
-record for staff: the AI's quotes, search and chat bookings use the hotel's
-base price, not offer prices.
+offer** (**Title**, **Room type**, **Price** per night, **Currency**, **Valid
+from**, **Valid to**, **Inclusions**, **Is active**) → **Add offer**. Each offer
+can be edited (**Edit** → **Save offer**) or deleted (**Remove**). Leave a
+validity date blank for "open-ended".
+
+**How a hotel's nightly price is worked out.** One rule is used everywhere —
+inventory search, the AI's quotes and recommendation cards, the max-price
+filter, chat bookings and the staff booking form:
+
+1. Take the hotel's **active** room offers whose validity window covers **every
+   night** of the stay (check-in to the night before check-out). When the dates
+   are not known yet — e.g. the customer has not given them to the chat — the
+   offers valid **tonight** are used.
+2. The **cheapest** of those sets the nightly price, and its room type is shown
+   next to the hotel (e.g. *4-star · Deluxe*).
+3. If no offer applies, the hotel's **Base price** is the nightly price.
+
+The **Hotels** list shows both the **Base price** and **Tonight** (the price
+the rule gives today). A booking keeps a copy of the offer it was priced with
+(title, room type, inclusions), so editing or removing the offer later does not
+change existing bookings.
 
 ### Cars
 
@@ -262,8 +283,30 @@ line per day — the day number is added automatically) → **Save package**.
 Each list has **Disable** / **Enable** buttons. Disabled items stay in the list
 (status *Inactive*) but are never recommended or bookable from the chat. The
 small `#12` under each name is the item's ID, used by visibility rules and the
-staff booking form. There is no delete button for hotels, cars or packages in
-the dashboard; disable items you no longer sell.
+staff booking form.
+
+### Archiving and deleting
+
+Admins, managers and inventory users see an **Archive** button on every hotel,
+car, package and destination. Archiving:
+
+- switches the item off and removes it from the lists, inventory search, the AI
+  and booking (an open chat recommendation for it answers *"Sorry, this option
+  is no longer available."*);
+- keeps it in the database with its bookings and history intact.
+
+Tick **Include archived** (or choose status **Archived only**) on a list to see
+archived items, marked *Archived*. Each has **Restore** — it comes back
+*Inactive*, so press **Enable** when it is ready to sell again — and **Delete
+permanently**. Permanent deletion is refused, with a message, when:
+
+- the item has any booking (it stays archived for the booking history);
+- a destination is still set on any hotel, car or package, archived ones
+  included.
+
+A destination cannot be archived while a live (non-archived) hotel, car or
+package uses it — archive or move those first. Archived destinations disappear
+from the destination drop-downs and the AI no longer recognises them.
 
 ### Visibility rules (per website)
 
@@ -284,7 +327,11 @@ priority 0. Filter the **Rules** table by **Website** and **Type**.
 ### Search
 
 Menu: **Inventory → Search**. Fields: **Keyword**, **Type**, **Destination**
-(name, city or code), **Min price**, **Max price**, **Website** → **Search**.
+(name, city or code), **Check in**, **Check out**, **Min price**, **Max price**,
+**Website** → **Search**. Hotels are priced for the dates given (tonight if
+none), using the room-offer rule above; the price filter uses that same price,
+and each hotel result names the offer it was priced with. The API takes the
+same dates as `check_in` / `check_out` and returns the `offer` with each hotel.
 This is exactly the search the AI uses: choosing a website applies its
 visibility rules. Results are sorted by website priority, then price.
 
@@ -543,10 +590,14 @@ the bookings page.
 |---|---|
 | **Pending Payment** | Raised, waiting for the customer to pay |
 | **Confirmed** | Payment verified |
-| **Failed** | Razorpay reported a failed attempt; the customer can try again with the same link |
+| **Failed** | Razorpay reported a failed attempt; the customer can try again (see *When a payment fails*) |
 | **Cancelled** | Cancelled by a manager before payment |
 | **Refunded** | Fully refunded in Razorpay |
-| Draft, Paid | Listed in the status filter, but the system does not currently put bookings in these states |
+
+There are no *Draft* or *Paid* statuses: a booking is raised ready to pay and is
+**Confirmed** the moment its payment is verified. (Any old rows in those states
+were moved to Pending Payment and Confirmed respectively when this release was
+installed.)
 
 Every booking has a number like `STA-20261007-0001`. Tax is added on top of the
 subtotal at the `BOOKING_TAX_PERCENT` rate (5% unless your administrator changed
@@ -559,7 +610,11 @@ presses **Book this**, confirms dates and travellers and any missing contact
 details, and presses **Confirm and get payment link**. The server prices the
 item itself — the browser cannot change the price:
 
-- Hotel: base price per night × nights (check-out minus check-in, at least one).
+- Hotel: the nightly price × nights (check-out minus check-in, at least one).
+  The nightly price is the cheapest active room offer valid for every night of
+  the stay, else the hotel's base price (see *How a hotel's nightly price is
+  worked out* in section 4). The room type is shown on the booking, the payment
+  page, the widget's booking card and the customer emails.
 - Car: daily price × days, counting both pick-up and drop-off day; the car must
   seat every traveller.
 - Package: base price per person × travellers; the end date follows from the
@@ -586,14 +641,24 @@ customer if they have an email address, and you are taken to the booking page.
 **Customer**, **Website**, **Lead** (optional), **Product type**, **Product id**
 (the inventory `#` number — find it on **Inventory → Search** or the inventory
 lists), **Product name** (filled from the item if left blank), **Travel start**,
-**Travel end**, **Travelers count**, **Currency**, **Subtotal**, **Email the
-payment link to the customer** → **Create booking**. Here **you** enter the
-subtotal; tax is added automatically. A payment link is created straight away.
+**Travel end**, **Travelers count**, **Room offer** (hotels), **Currency**,
+**Subtotal**, **Email the payment link to the customer** → **Create booking**.
+
+- **Room offer** lists every active offer as *Hotel (#id) · room type · price
+  per night*. Pick one to book that room type, or leave *Cheapest offer valid
+  for the dates* to let the pricing rule choose. An offer for a different hotel,
+  or one not valid for every night, is refused.
+- Leave **Subtotal** blank and it is priced from inventory exactly as a chat
+  booking is (and the dates must then be valid). Type a subtotal to charge a
+  negotiated amount instead; the chosen room offer is still recorded.
+
+Tax is added automatically. A payment link is created straight away.
 
 ### The booking page
 
-- **Booking summary** — number, customer, product, dates, travellers, website,
-  lead, chat (**Open transcript**), who created it.
+- **Booking summary** — number, customer, product, **Room** (hotel bookings priced
+  with a room offer: room type, offer title and inclusions), dates, travellers,
+  website, lead, chat (**Open transcript**), who created it.
 - **Amount** — Subtotal, Tax, Total.
 - **Payments** — every payment attempt with its Razorpay order and payment IDs,
   status and paid time. A **Simulation mode** badge shows when no live Razorpay
@@ -612,24 +677,44 @@ subtotal; tax is added automatically. A payment link is created straight away.
 
 ### The customer payment page
 
-The link (`/pay/<token>/`) needs no login. It shows the booking number, name,
-dates, travellers, the price breakdown and a **Pay ₹…** button that opens
-Razorpay Checkout. An expired link shows *"This payment link has expired"* and
+The link (`/pay/<token>/`) needs no login. It shows the booking number, room
+(for hotels), name, dates, travellers, the price breakdown and a **Pay ₹…**
+button that opens Razorpay Checkout. An expired link shows *"This payment link has expired"* and
 no prices or personal details; issue a new one from the booking page. After
 payment the page shows *"Payment received — your booking is confirmed."*
 
 ### Taking payment from the dashboard
 
 On a Pending Payment booking without an open order, **Create payment order**
-opens a Razorpay order. Then:
+opens a Razorpay order (on a Failed booking the button reads **Retry payment
+(new order)**). Then:
 
 - **Live mode**: **Pay with Razorpay** opens Razorpay Checkout in your browser
   (useful when taking a payment over the phone).
 - **Simulation mode** (no live keys): managers and admins see **Complete
   simulated payment**, which signs and verifies a payment locally through the
-  same verification code. The customer payment page shows **Simulate payment
-  (test mode)** instead of the pay button. Both disappear as soon as live
-  Razorpay keys are configured.
+  same verification code. Employees see a note instead: the customer can
+  complete the simulated payment from their payment link. The customer payment
+  page shows **Simulate payment (test mode)** instead of the pay button. Both
+  disappear as soon as live Razorpay keys are configured.
+
+### When a payment fails
+
+When Razorpay reports a failed attempt the booking becomes **Failed** and
+managers are notified. Nothing is lost — the booking can still be paid:
+
+- **The customer** opens the same payment link: the page says *"The last payment
+  attempt did not go through. No money was taken for it. You can try again
+  below."* and the pay button opens a **new** Razorpay order. If a card is
+  declined while Checkout is open, the page says so and the button can be
+  pressed again.
+- **Staff** see a warning with the failure reason on the booking page and can
+  press **Retry payment (new order)**, or **Issue new link** (with or without
+  email) if the customer's link has expired.
+
+Opening the new order puts the booking back to **Pending Payment**; the failed
+attempt stays in the **Payments** table for the record. Confirmed, Cancelled and
+Refunded bookings cannot open a new order.
 
 ### How a payment is confirmed
 
@@ -680,8 +765,25 @@ revenue** tile is the total of all successful payments in the system, and
 
 ### Dashboard overview (everyone)
 
-Filters at the top: website (**All websites** or one) and period (**Last 7
-days**, **Last 30 days**, **Last 90 days**).
+What the overview shows depends on your role:
+
+- **Managers and admins** — business-wide figures, as described below.
+- **Employees** — the same tiles, labelled **My figures**: each number counts
+  only the leads, chats, bookings, payments and follow-ups you can open (see
+  *What employees see* in section 1). *Revenue* reads **My revenue**.
+- **Inventory users** — an inventory overview instead: active / inactive /
+  archived counts for hotels, cars, packages and destinations; **Hidden items**
+  (inactive stock, plus how many items are hidden on a website by a visibility
+  rule); **Room offers valid today**; and the most **Recently updated** items.
+  No CRM or revenue figures.
+
+The API `GET /api/v1/dashboard/overview/` returns the same figures for the
+caller, with a `scope` field (`business`, `mine` or `inventory`). Passing
+`?scope=` for more than your role allows (an employee asking for `business`, an
+inventory user for `mine` or `business`) is refused with 403.
+
+Filters at the top (managers, admins and employees): website (**All websites**
+or one) and period (**Last 7 days**, **Last 30 days**, **Last 90 days**).
 
 | Tile / panel | What it counts |
 |---|---|
@@ -690,7 +792,7 @@ days**, **Last 30 days**, **Last 90 days**).
 | **Live chats** | Chats not closed right now (not limited to the period). *"N waiting for a human"*: chats in Waiting right now. |
 | **Bookings** | Bookings created in the period; *confirmed* = of those, how many are Confirmed; *pending* = all bookings currently Pending Payment, whenever created. |
 | **Revenue** | Sum of successful payments whose payment date falls in the period. Refunded payments drop out. *Avg … per booking*: average total of all Confirmed bookings, any date. |
-| **Overdue follow-ups** | All open follow-ups past their due time, across the business. |
+| **Overdue follow-ups** | Open follow-ups past their due time (an employee's: those they can see). |
 | **Leads per day** | Leads created each day of the period. |
 | **Pipeline** | All leads (any date) by current status. |
 | **Recent leads / Live conversations / Recent bookings** | The latest 10 you can open. |
@@ -955,8 +1057,11 @@ The answer is probably not in the Knowledge Base. Add or activate an article for
 that website or for **All websites**.
 
 **The AI never recommends a particular hotel.**
-Check that it is active, has a destination the customer named, a base price,
-and is not hidden for that website under **Visibility**. Use **Inventory →
+Check that it is active and not archived, has a destination the customer named,
+a price (a base price or a room offer valid for the dates), and is not hidden
+for that website under **Visibility**. With a budget, the hotel's nightly price
+for the customer's dates (the cheapest valid room offer, else the base price)
+must be within it. Use **Inventory →
 Search** with the same destination and website: if it does not appear there,
 the AI will not offer it.
 

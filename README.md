@@ -187,8 +187,12 @@ pickers, history kept) and restore them.
 ### 5. Inventory decides what can be sold
 
 Hotels (with room offers), car rentals and tour packages, all hung off a shared
-`Destination` list. Room offers are kept for staff reference; search, the AI's
-quotes and chat-booking prices use the hotel's base (per-night) price. One search — [`inventory/selectors.py:search_inventory`](inventory/selectors.py) —
+`Destination` list. A hotel's nightly price is its cheapest active room offer
+valid for every night of the stay (tonight when no dates are known), else its
+base price — one rule ([`inventory/selectors.py:hotel_nightly_price`](inventory/selectors.py))
+used by search, max-price filters, the AI's quotes and every booking price.
+Archived items (soft delete, restorable) never reach search, the AI or booking;
+a booked item can never be hard-deleted. One search — [`inventory/selectors.py:search_inventory`](inventory/selectors.py) —
 serves the dashboard search page, the public API and the AI engine, so the chat
 can never recommend something the search page wouldn't show.
 
@@ -266,11 +270,15 @@ unanswered message — to that person's first reply.
 |---|---|---|
 | **Admin** | Everything a manager can, plus **Users & Roles** (users, teams, audit log) and **AI Settings** | — |
 | **Manager** | All leads, customers, chats and bookings; assign chats; cancel bookings; complete simulated payments; archive/restore customers; websites and widget keys; inventory; **Knowledge Base**; **Reports**, **Analytics** and CSV exports | Users, teams, audit log, AI Settings. Refunds are not done in the app (Razorpay dashboard, then webhook) |
-| **Employee** | Leads assigned to them, to their teams, or to nobody; their own and unassigned chats (take over, reply, hand back, book for the customer); bookings they raised or whose lead they can see; matching customers and follow-ups; view websites and inventory | Assign chats, cancel bookings, simulated payments, archive customers, edit websites or inventory, reports/analytics/exports, Knowledge Base |
-| **Inventory** | Hotels, room offers, cars, packages, destinations, visibility rules; view websites | CRM, conversations, bookings, reports |
+| **Employee** | Leads assigned to them, to their teams, or to nobody; their own and unassigned chats (take over, reply, hand back, book for the customer); bookings they raised or whose lead they can see; matching customers and follow-ups; view inventory | Assign chats, cancel bookings, simulated payments, archive customers, websites and widget keys, edit inventory, reports/analytics/exports, Knowledge Base |
+| **Inventory** | Hotels, room offers, cars, packages, destinations, visibility rules, archive/restore/delete | Websites, CRM, conversations, bookings, reports |
 
-Every role sees the dashboard overview (its headline figures are business-wide)
-and its own notifications. Other employees' records are a 404, in the dashboard
+The dashboard overview follows the role: business-wide for managers and admins,
+*My figures* (only records they can open) for employees, an inventory summary
+for the inventory role. Buttons and menu links are shown from the same role
+check the target view runs ([`core/access.py:can_open`](core/access.py)), and
+form drop-downs only list records the user can see. Everyone gets their own
+notifications. Other employees' records are a 404, in the dashboard
 and the API alike. Superusers pass every role check and get the manager
 alerts; give them the Admin role too so the users list reads correctly. Sensitive actions (user changes, key
 issuance, status changes, payments) are written to the audit log with actor
@@ -401,7 +409,7 @@ Full VPS walkthrough — DNS, firewall, CD secrets, backups, troubleshooting —
 python manage.py test
 ```
 
-467 tests (43 of them end-to-end journeys) covering requirement extraction, the Claude and Gemini
+514 tests (43 of them end-to-end journeys) covering requirement extraction, the Claude and Gemini
 layers and each of their fallbacks (stubbed — no network), lead capture and
 deduplication, handoff and AI auto-resume, pipeline transitions, scoring,
 role-based and record-level visibility, inventory search and visibility rules,
