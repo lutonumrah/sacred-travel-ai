@@ -748,3 +748,730 @@ class ConversationAccessTests(TestCase):
         )
         self.assertEqual(self.client.get(reverse("api_conversations:inbox")).status_code, 403)
 
+
+
+# --------------------------------------------------------------------------
+# Batch 2: booking from the chat, history, handoff behaviour, auto-resume
+# --------------------------------------------------------------------------
+
+from datetime import timedelta  # noqa: E402
+
+from django.core.cache import cache  # noqa: E402
+from django.utils import timezone  # noqa: E402
+
+from accounts.models import AuditLog  # noqa: E402
+from bookings.models import Booking, BookingStatus, Notification  # noqa: E402
+from crm.models import LeadActivity, LeadStatus  # noqa: E402
+from inventory.models import CarRental  # noqa: E402
+
+from .models import Recommendation  # noqa: E402
+
+
+class PublicWidgetFixture(TestCase):
+    def setUp(self):
+        # Throttle counters live in the cache; start every test with a clean slate.
+        cache.clear()
+        self.goa = Destination.objects.create(name="Goa", code="goa")
+        self.hotel = Hotel.objects.create(
+            name="Palm Stay", destination=self.goa, base_price=Decimal("3000"), star_rating=3
+        )
+        self.website = Website.objects.create(
+            name="Main", domain="main.com", source_identifier="main"
+        )
+        self.key = issue_api_key(website=self.website)
+        self.manager = User.objects.create_user("mgr", password="pw", role="manager")
+        self.chat_url = reverse("api_conversations:widget_chat")
+        self.history_url = reverse("api_conversations:widget_history")
+        self.book_url = reverse("api_conversations:widget_book")
+
+    def chat(self, message, session="", **headers):
+        return self.client.post(
+            self.chat_url,
+            {"key": self.key.public_key, "message": message, "session": session},
+            content_type="application/json",
+            **headers,
+        )
+
+    def start_with_cards(self):
+        data = self.chat("hotel in Goa").json()["data"]
+        return data["session"], data["reply"]["cards"]
+
+    def book(self, session, recommendation_id, **overrides):
+        start = timezone.localdate() + timedelta(days=10)
+        payload = {
+            "key": self.key.public_key,
+            "session": session,
+            "recommendation_id": recommendation_id,
+            "name": "Ana Rao",
+            "email": "ana@example.com",
+            "phone": "9810000000",
+            "travel_start": start.isoformat(),
+            "travel_end": (start + timedelta(days=3)).isoformat(),
+            "travelers": 2,
+        }
+        payload.update(overrides)
+        return self.client.post(self.book_url, payload, content_type="application/json")
+
+
+class WidgetBookTests(PublicWidgetFixture):
+    def test_cards_carry_a_bookable_recommendation_id(self):
+        _session, cards = self.start_with_cards()
+        self.assertEqual(cards[0]["title"], "Palm Stay")
+        self.assertTrue(cards[0]["bookable"])
+        self.assertTrue(Recommendation.objects.filter(pk=cards[0]["recommendation_id"]).exists())
+
+    def test_booking_from_the_widget_creates_a_pending_booking_and_pay_link(self):
+        session, cards = self.start_with_cards()
+        response = self.book(session, cards[0]["recommendation_id"])
+
+        self.assertEqual(response.status_code, 201, response.content)
+        data = response.json()["data"]
+        booking = Booking.objects.get()
+        self.assertEqual(booking.status, BookingStatus.PENDING)
+        # Server-side price: 3 nights × ₹3,000, plus 5% tax.
+        self.assertEqual(booking.subtotal, Decimal("9000.00"))
+        self.assertEqual(booking.tax_amount, Decimal("450.00"))
+        self.assertEqual(booking.total_amount, Decimal("9450.00"))
+        self.assertEqual(Decimal(str(data["booking"]["total"])), Decimal("9450"))
+        self.assertIn(f"/pay/{booking.payment_token}/", data["payment_url"])
+        self.assertTrue(data["payment_url"].startswith("http"))
+
+        conversation = Conversation.objects.get(session_key=session)
+        self.assertEqual(booking.conversation, conversation)
+        self.assertEqual(booking.customer.email, "ana@example.com")
+        self.assertEqual(booking.customer.first_name, "Ana")
+        self.assertEqual(booking.lead, conversation.lead)
+        self.assertTrue(Recommendation.objects.get(pk=cards[0]["recommendation_id"]).is_selected)
+        note = conversation.messages.filter(sender_type=MessageSender.SYSTEM).last()
+        self.assertEqual(note.metadata["event"], "booking_created")
+        self.assertIn(booking.booking_number, note.content)
+        self.assertTrue(
+            Notification.objects.filter(recipient=self.manager, metadata__booking_id=booking.pk)
+        )
+
+        lead = conversation.lead
+        lead.refresh_from_db()
+        self.assertEqual(lead.status, LeadStatus.PAYMENT_PENDING)
+        moves = list(
+            LeadActivity.objects.filter(lead=lead, activity_type="status_change")
+            .order_by("created_at")
+            .values_list("details__to", flat=True)
+        )
+        self.assertEqual(moves[-2:], [LeadStatus.INTERESTED, LeadStatus.PAYMENT_PENDING])
+
+    def test_prices_sent_by_the_browser_are_ignored(self):
+        session, cards = self.start_with_cards()
+        self.book(session, cards[0]["recommendation_id"], subtotal="1", price="1", total="1")
+        self.assertEqual(Booking.objects.get().subtotal, Decimal("9000.00"))
+
+    def test_a_recommendation_from_another_chat_is_rejected(self):
+        session, _cards = self.start_with_cards()
+        _other_session, other_cards = self.start_with_cards()
+        response = self.book(session, other_cards[0]["recommendation_id"])
+        self.assertEqual(response.status_code, 404)
+        self.assertFalse(Booking.objects.exists())
+
+    def test_another_websites_key_cannot_book_into_this_chat(self):
+        session, cards = self.start_with_cards()
+        other = Website.objects.create(name="Other", domain="other.com", source_identifier="other")
+        other_key = issue_api_key(website=other)
+        response = self.book(session, cards[0]["recommendation_id"], key=other_key.public_key)
+        self.assertEqual(response.status_code, 404)
+        self.assertFalse(Booking.objects.exists())
+
+    def test_missing_contact_details_are_reported_per_field(self):
+        session, cards = self.start_with_cards()
+        response = self.book(session, cards[0]["recommendation_id"], email="", phone="")
+        self.assertEqual(response.status_code, 400)
+        detail = response.json()["error"]["detail"]
+        self.assertIn("email", detail)
+        self.assertIn("phone", detail)
+
+    def test_details_already_given_in_the_chat_need_not_be_retyped(self):
+        session, cards = self.start_with_cards()
+        self.chat("I'm Ana, ana@example.com, 9810000000", session=session)
+        response = self.book(session, cards[0]["recommendation_id"], email="", phone="")
+        self.assertEqual(response.status_code, 201, response.content)
+
+    def test_a_past_date_is_refused_with_a_readable_message(self):
+        session, cards = self.start_with_cards()
+        past = (timezone.localdate() - timedelta(days=3)).isoformat()
+        response = self.book(session, cards[0]["recommendation_id"], travel_start=past)
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("past", response.json()["message"])
+
+    def test_asking_twice_returns_the_same_booking(self):
+        session, cards = self.start_with_cards()
+        self.book(session, cards[0]["recommendation_id"])
+        again = self.book(session, cards[0]["recommendation_id"])
+        self.assertEqual(again.status_code, 200)
+        self.assertFalse(again.json()["data"]["created"])
+        self.assertEqual(Booking.objects.count(), 1)
+
+
+class WidgetHistoryTests(PublicWidgetFixture):
+    def test_history_restores_the_chat_with_its_cards(self):
+        session, cards = self.start_with_cards()
+        conversation = Conversation.objects.get(session_key=session)
+        services.post_message(
+            conversation=conversation,
+            sender_type=MessageSender.SYSTEM,
+            content="Internal: VIP",
+            is_internal=True,
+        )
+        response = self.client.get(
+            self.history_url, {"key": self.key.public_key, "session": session}
+        )
+        self.assertEqual(response.status_code, 200)
+        messages = response.json()["data"]["messages"]
+        self.assertEqual([m["sender_type"] for m in messages], ["customer", "ai"])
+        self.assertEqual(messages[1]["cards"][0]["recommendation_id"], cards[0]["recommendation_id"])
+        self.assertNotIn("Internal: VIP", response.content.decode())
+
+    def test_since_returns_only_newer_messages(self):
+        data = self.chat("hi").json()["data"]
+        response = self.client.get(
+            self.history_url,
+            {"key": self.key.public_key, "session": data["session"], "since": data["reply"]["id"]},
+        )
+        self.assertEqual(response.json()["data"]["messages"], [])
+
+    def test_unknown_or_foreign_sessions_are_404(self):
+        session, _cards = self.start_with_cards()
+        other = Website.objects.create(name="Other", domain="other.com", source_identifier="other")
+        other_key = issue_api_key(website=other)
+        for params in (
+            {"key": self.key.public_key, "session": "nope"},
+            {"key": other_key.public_key, "session": session},
+        ):
+            self.assertEqual(self.client.get(self.history_url, params).status_code, 404)
+
+    def test_history_lists_the_chats_bookings_with_pay_links(self):
+        session, cards = self.start_with_cards()
+        self.book(session, cards[0]["recommendation_id"])
+        data = self.client.get(
+            self.history_url, {"key": self.key.public_key, "session": session}
+        ).json()["data"]
+        self.assertEqual(len(data["bookings"]), 1)
+        self.assertIn("/pay/", data["bookings"][0]["payment_url"])
+        created = [m for m in data["messages"] if m["event"] == "booking_created"]
+        self.assertIn("/pay/", created[0]["booking"]["payment_url"])
+
+
+class HumanInvolvedTests(PublicWidgetFixture):
+    def setUp(self):
+        super().setUp()
+        self.agent = User.objects.create_user("agent", password="pw", role="employee")
+        data = self.chat("hi").json()["data"]
+        self.session = data["session"]
+        self.conversation = Conversation.objects.get(session_key=self.session)
+
+    def test_no_stale_reply_while_an_agent_owns_the_chat(self):
+        services.take_over(conversation=self.conversation, user=self.agent)
+        services.agent_reply(conversation=self.conversation, user=self.agent, text="Hello, Ravi here")
+        data = self.chat("are you there?", session=self.session).json()["data"]
+
+        # Regression: the last agent/AI message used to come back as a "new" reply.
+        self.assertIsNone(data["reply"])
+        self.assertEqual(data["messages"], [])
+        self.assertEqual(data["status"], ConversationStatus.HUMAN_ACTIVE)
+        self.assertTrue(data["awaiting_human"])
+        self.assertEqual(data["notice"], "")
+
+    def test_the_ai_stops_answering_while_waiting_for_a_person(self):
+        services.request_handoff(conversation=self.conversation, reason="Asked for a human")
+        ai_before = self.conversation.messages.filter(sender_type=MessageSender.AI).count()
+        data = self.chat("hotel in Goa please", session=self.session).json()["data"]
+
+        self.assertIsNone(data["reply"])
+        self.assertEqual(data["status"], ConversationStatus.WAITING)
+        self.assertIn("consultant", data["notice"])
+        self.assertEqual(
+            self.conversation.messages.filter(sender_type=MessageSender.AI).count(), ai_before
+        )
+        # The message is still stored for the agent, and its details still reach the lead.
+        self.assertTrue(
+            self.conversation.messages.filter(content="hotel in Goa please").exists()
+        )
+        self.conversation.refresh_from_db()
+        self.assertEqual(self.conversation.requirements.get("destination"), "Goa")
+
+    def test_a_handoff_records_when_it_was_requested(self):
+        services.request_handoff(conversation=self.conversation)
+        self.conversation.refresh_from_db()
+        self.assertIsNotNone(self.conversation.handoff_requested_at)
+
+
+class AutoResumeTests(PublicWidgetFixture):
+    def setUp(self):
+        super().setUp()
+        self.agent = User.objects.create_user("agent", password="pw", role="employee")
+        data = self.chat("hi").json()["data"]
+        self.session = data["session"]
+        self.conversation = Conversation.objects.get(session_key=self.session)
+
+    def configure(self, wait=0, idle=0):
+        config = AISettings.load()
+        config.handoff_wait_minutes = wait
+        config.agent_idle_minutes = idle
+        config.save()
+
+    def wait_since(self, minutes):
+        services.request_handoff(conversation=self.conversation)
+        Conversation.objects.filter(pk=self.conversation.pk).update(
+            handoff_requested_at=timezone.now() - timedelta(minutes=minutes)
+        )
+        self.conversation.refresh_from_db()
+
+    def test_an_unanswered_handoff_goes_back_to_the_ai_on_the_next_message(self):
+        self.configure(wait=15)
+        self.wait_since(20)
+        data = self.chat("hotel in Goa", session=self.session).json()["data"]
+
+        self.assertEqual(data["status"], ConversationStatus.AI_ACTIVE)
+        self.assertIsNotNone(data["reply"])
+        engines = [m["content"] for m in data["messages"]]
+        self.assertIn(services.AUTO_RESUME_MESSAGES["handoff_wait"], engines)
+        self.assertTrue(AuditLog.objects.filter(action="conversation.auto_resume").exists())
+        self.assertTrue(
+            Notification.objects.filter(recipient=self.manager, metadata__reason="handoff_wait")
+        )
+
+    def test_the_timer_is_respected_and_zero_means_never(self):
+        self.configure(wait=15)
+        self.wait_since(5)
+        self.assertFalse(services.maybe_auto_resume(conversation=self.conversation))
+        self.configure(wait=0)
+        self.wait_since(600)
+        self.assertFalse(services.maybe_auto_resume(conversation=self.conversation))
+        self.conversation.refresh_from_db()
+        self.assertEqual(self.conversation.status, ConversationStatus.WAITING)
+
+    def test_polling_history_also_triggers_the_resume(self):
+        self.configure(wait=15)
+        self.wait_since(30)
+        data = self.client.get(
+            self.history_url, {"key": self.key.public_key, "session": self.session}
+        ).json()["data"]
+        self.assertEqual(data["status"], ConversationStatus.AI_ACTIVE)
+
+    def test_an_idle_agent_hands_the_chat_back(self):
+        self.configure(idle=10)
+        services.take_over(conversation=self.conversation, user=self.agent)
+        self.conversation.handoffs.update(created_at=timezone.now() - timedelta(minutes=40))
+        question = services.post_message(
+            conversation=self.conversation, sender_type=MessageSender.CUSTOMER, content="hello?"
+        )
+        Message.objects.filter(pk=question.pk).update(
+            created_at=timezone.now() - timedelta(minutes=15)
+        )
+        self.assertEqual(services.auto_resume_reason(self.conversation), "agent_idle")
+        self.assertTrue(services.maybe_auto_resume(conversation=self.conversation))
+        self.conversation.refresh_from_db()
+        self.assertEqual(self.conversation.status, ConversationStatus.AI_ACTIVE)
+        self.assertTrue(
+            Notification.objects.filter(recipient=self.agent, metadata__reason="agent_idle")
+        )
+
+    def test_an_agent_who_replied_is_not_idle(self):
+        self.configure(idle=10)
+        services.take_over(conversation=self.conversation, user=self.agent)
+        question = services.post_message(
+            conversation=self.conversation, sender_type=MessageSender.CUSTOMER, content="hello?"
+        )
+        Message.objects.filter(pk=question.pk).update(
+            created_at=timezone.now() - timedelta(minutes=15)
+        )
+        services.agent_reply(conversation=self.conversation, user=self.agent, text="Here!")
+        self.assertEqual(services.auto_resume_reason(self.conversation), "")
+
+    def test_the_sweep_for_a_scheduler_resumes_stale_chats(self):
+        self.configure(wait=15)
+        self.wait_since(20)
+        fresh, _ = services.start_conversation(website=self.website)
+        services.request_handoff(conversation=fresh)
+        self.assertEqual(services.auto_resume_stale_conversations(), 1)
+        fresh.refresh_from_db()
+        self.assertEqual(fresh.status, ConversationStatus.WAITING)
+
+    def test_ai_settings_page_saves_the_timers(self):
+        admin = User.objects.create_user("boss", password="pw", role="admin")
+        self.client.force_login(admin)
+        self.client.post(
+            reverse("conversations:ai_settings"),
+            {
+                "enabled": "on",
+                "provider": "anthropic",
+                "model": "claude-opus-5-5",
+                "custom_model": "",
+                "handoff_wait_minutes": "7",
+                "agent_idle_minutes": "0",
+            },
+        )
+        stored = AISettings.load()
+        self.assertEqual((stored.handoff_wait_minutes, stored.agent_idle_minutes), (7, 0))
+        page = self.client.get(reverse("conversations:ai_settings")).content.decode()
+        self.assertIn("handoff_wait_minutes", page)
+
+
+class PreferenceExtractionTests(TestCase):
+    def setUp(self):
+        Destination.objects.create(name="Goa", code="goa")
+
+    def test_hotel_food_and_style_wishes_are_picked_up(self):
+        requirements = ai.extract_requirements(
+            "Honeymoon in Goa, a 5 star hotel with a pool and sea view, pure veg food"
+        )
+        preferences = requirements["preferences"]
+        self.assertEqual(preferences["hotel_stars"], 5)
+        self.assertEqual(preferences["amenities"], ["pool", "sea view"])
+        self.assertEqual(preferences["food"], "veg")
+        self.assertEqual(preferences["trip_style"], "honeymoon")
+        # Every key is present so the shape matches the strict model schema.
+        self.assertEqual(set(preferences), set(ai.EMPTY_PREFERENCES))
+
+    def test_car_wishes_and_accumulation_across_turns(self):
+        first = ai.extract_requirements("need an automatic SUV in Goa")
+        second = ai.extract_requirements("with wifi please, non-veg is fine", first)
+        preferences = second["preferences"]
+        self.assertEqual(preferences["car_type"], "suv")
+        self.assertEqual(preferences["transmission"], "automatic")
+        self.assertEqual(preferences["food"], "non-veg")
+        self.assertEqual(preferences["amenities"], ["wifi"])
+
+    def test_nothing_stated_means_no_preferences_key(self):
+        self.assertNotIn("preferences", ai.extract_requirements("hotel in Goa for 2 people"))
+
+    def test_the_strict_schema_requires_every_property(self):
+        def check(schema):
+            if schema.get("type") == "object":
+                self.assertFalse(schema["additionalProperties"])
+                self.assertEqual(set(schema["required"]), set(schema["properties"]))
+                for child in schema["properties"].values():
+                    check(child)
+
+        check(ai.RESPONSE_SCHEMA)
+        requirements = ai.RESPONSE_SCHEMA["properties"]["requirements"]["properties"]
+        self.assertIn("preferences", requirements)
+        self.assertIn("budget_min", requirements)
+
+    def test_blank_model_preferences_do_not_erase_rule_findings(self):
+        merged = ai.merge_preferences(
+            {"hotel_stars": 4, "amenities": ["pool"]}, dict(ai.EMPTY_PREFERENCES)
+        )
+        self.assertEqual(merged["hotel_stars"], 4)
+        self.assertEqual(merged["amenities"], ["pool"])
+
+    def test_a_bare_may_is_not_a_month(self):
+        self.assertNotIn("travel_month", ai.extract_requirements("I may go to Goa"))
+        self.assertIn("travel_month", ai.extract_requirements("Goa in December"))
+
+
+class PreferenceMatchingTests(TestCase):
+    def setUp(self):
+        self.goa = Destination.objects.create(name="Goa", code="goa")
+        Hotel.objects.create(name="Budget Inn", destination=self.goa, star_rating=3,
+                             base_price=Decimal("2000"))
+        Hotel.objects.create(name="Grand Palace", destination=self.goa, star_rating=5,
+                             base_price=Decimal("9000"), amenities=["Pool", "Spa"])
+        Hotel.objects.create(name="Sea Breeze", destination=self.goa, star_rating=4,
+                             base_price=Decimal("6000"), amenities=["Wi-Fi"])
+        CarRental.objects.create(name="Swift", destination=self.goa, vehicle_type="Hatchback",
+                                 seats=4, daily_price=Decimal("1500"), transmission="Manual")
+        CarRental.objects.create(name="Innova", destination=self.goa, vehicle_type="SUV",
+                                 seats=7, daily_price=Decimal("3500"), transmission="Automatic")
+
+    def names(self, requirements):
+        return [item["name"] for item in ai.match_inventory(requirements)]
+
+    def test_star_rating_is_a_minimum(self):
+        names = self.names({
+            "destination": "Goa", "product_type": "hotel", "preferences": {"hotel_stars": 4},
+        })
+        self.assertEqual(sorted(names), ["Grand Palace", "Sea Breeze"])
+
+    def test_wanted_amenities_rank_first(self):
+        names = self.names({
+            "destination": "Goa", "product_type": "hotel", "preferences": {"amenities": ["wifi"]},
+        })
+        self.assertEqual(names[0], "Sea Breeze")
+
+    def test_a_car_never_has_fewer_seats_than_travellers(self):
+        names = self.names({"destination": "Goa", "product_type": "car", "travelers": 6})
+        self.assertEqual(names, ["Innova"])
+
+    def test_car_type_and_transmission_filter(self):
+        names = self.names({
+            "destination": "Goa",
+            "product_type": "car",
+            "preferences": {"car_type": "hatchback", "transmission": "manual"},
+        })
+        self.assertEqual(names, ["Swift"])
+
+
+class LeadQualificationTests(TestCase):
+    def setUp(self):
+        Destination.objects.create(name="Goa", code="goa")
+        self.website = Website.objects.create(
+            name="Main", domain="main.com", source_identifier="main"
+        )
+        self.conversation, _ = services.start_conversation(website=self.website)
+
+    def say(self, text):
+        # Each turn is a fresh request: nothing cached from the previous one.
+        self.conversation.refresh_from_db()
+        services.handle_customer_message(conversation=self.conversation, text=text)
+        self.conversation.refresh_from_db()
+        return self.conversation.lead
+
+    def test_a_lead_qualifies_once_trip_party_dates_and_contact_are_known(self):
+        lead = self.say("hotel in Goa")
+        self.assertEqual(lead.status, LeadStatus.NEW)
+        lead = self.say("for 2 people from 12 dec to 15 dec")
+        self.assertEqual(lead.status, LeadStatus.NEW)  # no way to reach them yet
+        lead = self.say("my email is ana@example.com")
+        self.assertEqual(lead.status, LeadStatus.QUALIFIED)
+        activity = LeadActivity.objects.get(lead=lead, activity_type="status_change")
+        self.assertEqual(activity.details["to"], LeadStatus.QUALIFIED)
+
+    def test_qualification_never_moves_a_lead_backwards_or_out_of_closed(self):
+        lead = self.say("hotel in Goa")
+        for status in (LeadStatus.INTERESTED, LeadStatus.LOST, LeadStatus.CONVERTED):
+            Lead.objects.filter(pk=lead.pk).update(status=status)
+            lead = self.say("for 2 people from 12 dec to 15 dec, ana@example.com")
+            self.assertEqual(lead.status, status)
+
+    def test_preferences_and_budget_are_copied_to_the_lead(self):
+        lead = self.say("5 star hotel in Goa with a pool, budget 20000 to 50000")
+        self.assertEqual(lead.preferences["hotel_stars"], 5)
+        self.assertEqual(lead.preferences["amenities"], ["pool"])
+        self.assertEqual(lead.preferences["product_type"], "hotel")
+        self.assertNotIn("food", lead.preferences)  # blanks are dropped
+        self.assertEqual(lead.budget_max, Decimal("50000"))
+        self.assertEqual(lead.budget_min, Decimal("20000"))
+
+    def test_preferences_show_on_the_conversation_and_lead_pages(self):
+        lead = self.say("5 star hotel in Goa with a pool, ana@example.com")
+        manager = User.objects.create_user("mgr", password="pw", role="manager")
+        self.client.force_login(manager)
+        for url in (
+            reverse("conversations:detail", args=[self.conversation.pk]),
+            reverse("crm:lead_detail", args=[lead.pk]),
+        ):
+            page = self.client.get(url).content.decode()
+            self.assertIn("5-star or better", page, url)
+            self.assertIn("pool", page, url)
+
+
+class ThrottleTests(PublicWidgetFixture):
+    @override_settings(PUBLIC_API_THROTTLE_RATES={
+        "widget_chat": "2/minute", "widget_poll": "2/minute",
+        "widget_book": "2/minute", "public_pay": "2/minute",
+    })
+    def test_the_chat_endpoint_returns_429_past_the_limit(self):
+        self.assertEqual(self.chat("hi").status_code, 200)
+        self.assertEqual(self.chat("hi").status_code, 200)
+        response = self.chat("hi")
+        self.assertEqual(response.status_code, 429)
+        self.assertFalse(response.json()["success"])
+
+    @override_settings(PUBLIC_API_THROTTLE_RATES={
+        "widget_chat": "100/minute", "widget_poll": "2/minute",
+        "widget_book": "2/minute", "public_pay": "2/minute",
+    })
+    def test_history_and_book_have_their_own_limits(self):
+        session, cards = self.start_with_cards()
+        params = {"key": self.key.public_key, "session": session}
+        codes = [self.client.get(self.history_url, params).status_code for _ in range(3)]
+        self.assertEqual(codes, [200, 200, 429])
+        codes = [self.book(session, cards[0]["recommendation_id"]).status_code for _ in range(3)]
+        self.assertEqual(codes[-1], 429)
+
+    @override_settings(PUBLIC_API_THROTTLE_RATES={
+        "widget_chat": "2/minute", "widget_poll": "2/minute",
+        "widget_book": "2/minute", "public_pay": "2/minute",
+    })
+    def test_a_client_cannot_dodge_the_limit_by_forging_forwarded_for(self):
+        # Behind nginx (NUM_PROXIES=1) only the address nginx appended counts.
+        codes = [
+            self.chat("hi", HTTP_X_FORWARDED_FOR=f"10.0.0.{n}, 203.0.113.9").status_code
+            for n in range(3)
+        ]
+        self.assertEqual(codes, [200, 200, 429])
+
+    def test_staff_endpoints_are_not_throttled_this_way(self):
+        from rest_framework.settings import api_settings
+
+        self.assertEqual(api_settings.DEFAULT_THROTTLE_CLASSES, [])
+
+
+class CORSTests(PublicWidgetFixture):
+    def preflight(self, url, origin):
+        return self.client.options(
+            url,
+            HTTP_ORIGIN=origin,
+            HTTP_ACCESS_CONTROL_REQUEST_METHOD="POST",
+            HTTP_ACCESS_CONTROL_REQUEST_HEADERS="content-type",
+        )
+
+    def test_preflight_is_allowed_for_the_sites_domain_and_subdomains(self):
+        for origin in ("https://main.com", "https://www.main.com", "http://shop.main.com"):
+            response = self.preflight(self.chat_url, origin)
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response["Access-Control-Allow-Origin"], origin)
+            self.assertIn("content-type", response["Access-Control-Allow-Headers"])
+
+    def test_other_origins_get_no_cors_headers(self):
+        for origin in (
+            "https://evil.com",
+            "https://main.com.evil.net",
+            "https://notmain.com",
+            "https://main.com:8443",
+            "null",
+        ):
+            response = self.preflight(self.chat_url, origin)
+            self.assertNotIn("Access-Control-Allow-Origin", response, origin)
+            response = self.chat("hi", HTTP_ORIGIN=origin)
+            self.assertNotIn("Access-Control-Allow-Origin", response, origin)
+
+    def test_a_real_request_is_allowed_for_its_own_website_only(self):
+        response = self.chat("hi", HTTP_ORIGIN="https://www.main.com")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Access-Control-Allow-Origin"], "https://www.main.com")
+
+        # Another registered site's page can't use this site's key.
+        Website.objects.create(name="Other", domain="other.com", source_identifier="other")
+        response = self.chat("hi", HTTP_ORIGIN="https://other.com")
+        self.assertNotIn("Access-Control-Allow-Origin", response)
+
+    def test_errors_are_readable_cross_origin_too(self):
+        response = self.client.post(
+            self.chat_url,
+            {"key": "pk_nope", "message": "hi"},
+            content_type="application/json",
+            HTTP_ORIGIN="https://main.com",
+        )
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response["Access-Control-Allow-Origin"], "https://main.com")
+
+    def test_the_staff_api_never_answers_cross_origin(self):
+        self.client.force_login(self.manager)
+        url = reverse("api_conversations:inbox")
+        self.assertNotIn("Access-Control-Allow-Origin", self.preflight(url, "https://main.com"))
+        response = self.client.get(url, HTTP_ORIGIN="https://main.com")
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("Access-Control-Allow-Origin", response)
+
+    def test_a_domain_with_a_port_must_match_exactly(self):
+        from core.cors import origin_matches_domain
+
+        self.assertTrue(origin_matches_domain("http://localhost:3000", "localhost:3000"))
+        self.assertFalse(origin_matches_domain("http://localhost:4000", "localhost:3000"))
+        self.assertFalse(origin_matches_domain("http://localhost", "localhost:3000"))
+        self.assertTrue(origin_matches_domain("https://a.b.main.com", "https://www.main.com/"))
+        self.assertFalse(origin_matches_domain("ftp://main.com", "main.com"))
+
+    def test_a_disabled_widget_site_is_not_an_allowed_origin(self):
+        self.website.widget_enabled = False
+        self.website.save()
+        self.assertNotIn(
+            "Access-Control-Allow-Origin", self.preflight(self.chat_url, "https://main.com")
+        )
+
+
+class AssignmentTests(TestCase):
+    def setUp(self):
+        self.website = Website.objects.create(
+            name="Main", domain="main.com", source_identifier="main"
+        )
+        self.manager = User.objects.create_user("mgr", password="pw", role="manager")
+        self.agent = User.objects.create_user("agent", password="pw", role="employee")
+        self.other = User.objects.create_user("other", password="pw", role="employee")
+        self.conversation, _ = services.start_conversation(website=self.website)
+        services.request_handoff(conversation=self.conversation)
+        self.url = reverse("conversations:assign", args=[self.conversation.pk])
+
+    def test_a_manager_assigns_and_the_agent_is_told(self):
+        self.client.force_login(self.manager)
+        response = self.client.post(self.url, {"assigned_to": self.agent.pk})
+        self.assertRedirects(response, reverse("conversations:detail", args=[self.conversation.pk]))
+        self.conversation.refresh_from_db()
+        self.assertEqual(self.conversation.assigned_to, self.agent)
+        self.assertTrue(
+            Notification.objects.filter(recipient=self.agent, title="Chat assigned to you")
+        )
+        entry = AuditLog.objects.get(action="conversation.assign")
+        self.assertEqual(entry.metadata, {"from": None, "to": "agent"})
+        note = self.conversation.messages.last()
+        self.assertTrue(note.is_internal)
+
+    def test_reassigning_from_the_inbox_row_returns_to_the_inbox(self):
+        services.assign_conversation(
+            conversation=self.conversation, user=self.agent, actor=self.manager
+        )
+        self.client.force_login(self.manager)
+        inbox = self.client.get(reverse("conversations:inbox")).content.decode()
+        self.assertIn(self.url, inbox)
+        response = self.client.post(self.url, {"assigned_to": self.other.pk, "next": "inbox"})
+        self.assertRedirects(response, reverse("conversations:inbox"))
+        self.conversation.refresh_from_db()
+        self.assertEqual(self.conversation.assigned_to, self.other)
+
+    def test_employees_cannot_assign(self):
+        self.client.force_login(self.agent)
+        response = self.client.post(self.url, {"assigned_to": self.agent.pk})
+        self.assertRedirects(response, reverse("dashboard:overview"))
+        self.conversation.refresh_from_db()
+        self.assertIsNone(self.conversation.assigned_to)
+        inbox = self.client.get(reverse("conversations:inbox")).content.decode()
+        self.assertNotIn(self.url, inbox)
+
+    def test_only_sales_staff_can_be_picked(self):
+        stock = User.objects.create_user("stock", password="pw", role="inventory")
+        self.client.force_login(self.manager)
+        self.client.post(self.url, {"assigned_to": stock.pk})
+        self.conversation.refresh_from_db()
+        self.assertIsNone(self.conversation.assigned_to)
+
+
+class StaffBookingFromChatTests(PublicWidgetFixture):
+    def setUp(self):
+        super().setUp()
+        self.agent = User.objects.create_user("agent", password="pw", role="employee")
+        session, cards = self.start_with_cards()
+        self.rec_id = cards[0]["recommendation_id"]
+        self.conversation = Conversation.objects.get(session_key=session)
+        self.chat("my email is ana@example.com", session=session)
+        services.take_over(conversation=self.conversation, user=self.agent)
+        self.client.force_login(self.agent)
+        self.url = reverse("conversations:book", args=[self.conversation.pk])
+
+    def test_an_agent_books_a_recommendation_for_the_customer(self):
+        start = timezone.localdate() + timedelta(days=5)
+        page = self.client.get(reverse("conversations:detail", args=[self.conversation.pk]))
+        self.assertContains(page, "Book this for the customer")
+        response = self.client.post(self.url, {
+            "recommendation_id": self.rec_id,
+            "travel_start": start.isoformat(),
+            "travel_end": (start + timedelta(days=2)).isoformat(),
+            "travelers": 2,
+        })
+        booking = Booking.objects.get()
+        self.assertRedirects(response, reverse("bookings:detail", args=[booking.pk]))
+        self.assertEqual(booking.subtotal, Decimal("6000.00"))
+        self.assertEqual(booking.created_by, self.agent)
+        self.assertTrue(booking.payment_token)
+        note = self.conversation.messages.filter(sender_type=MessageSender.SYSTEM).last()
+        self.assertIn("agent booked Palm Stay", note.content)
+
+    def test_another_agents_chat_is_out_of_reach(self):
+        self.client.force_login(User.objects.create_user("x", password="pw", role="employee"))
+        start = timezone.localdate() + timedelta(days=5)
+        response = self.client.post(self.url, {
+            "recommendation_id": self.rec_id,
+            "travel_start": start.isoformat(),
+            "travel_end": (start + timedelta(days=2)).isoformat(),
+            "travelers": 2,
+        })
+        self.assertEqual(response.status_code, 404)
+        self.assertFalse(Booking.objects.exists())

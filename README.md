@@ -53,6 +53,14 @@ Each website's detail page shows a ready-made embed snippet:
 Try it without deploying anything at **Conversations → Widget preview** — the
 bubble there is the real widget hitting the real API.
 
+The widget API answers cross-origin requests only from the website's own
+`domain` — the bare domain, `www.` and any subdomain, over http or https (a
+domain saved with a port, e.g. `localhost:3000`, must match that port). Each
+request is checked against the site its key belongs to; the staff API never
+sends CORS headers. On phones the open chat goes full screen, the chat survives
+a page reload, and the widget polls while a consultant is involved or a
+payment is outstanding.
+
 ### 2. The AI answers, and quietly builds a lead
 
 `POST /api/v1/conversations/widget/chat/` is public, authenticated by the
@@ -68,11 +76,15 @@ message and merges them with everything learned in earlier turns:
 | Product type | hotel / car / package, from keywords |
 | Travel dates | `2027-03-12`, `12/03/2027`, `12 March 2027` |
 | Party size | "4 people", "6 adults" |
-| Budget | `40k`, `1.5 lakh`, `₹25,000` |
+| Budget | `40k`, `1.5 lakh`, `₹25,000` (a range fills both min and max) |
+| Preferences | hotel stars, amenities, food (veg/Jain/halal), car type, transmission, trip style |
 | Contact | email and phone anywhere in the text |
 | Handoff | "talk to a human", "refund", "cancel my booking" |
 
 It then searches live inventory for matches, honouring per-website visibility.
+Preferences the data can answer are applied: a minimum star rating, car type,
+transmission and — always — enough seats for the whole party; wanted amenities
+rank hotels higher.
 
 **Layer 2 — Claude or Gemini (optional).** An admin picks the provider, model
 and API key under **AI Settings** in the dashboard (keys are write-only and never
@@ -88,7 +100,20 @@ templated reply. The transcript records which engine answered each turn.
 detail, a `Lead` is created (source: AI Chat) and linked to the conversation.
 Later turns enrich that same lead rather than creating duplicates, and a
 matching email or phone reuses the existing `Customer` instead of duplicating
-the person.
+the person. A lead moves itself from **New** to **Qualified** once destination,
+dates, party size and a contact are all known, and to **Interested** when the
+customer picks an option; automatic moves only ever go forward and never touch
+Converted or Lost leads.
+
+**Booking from the chat.** Each recommendation card has a *Book this* button.
+The customer confirms dates, travellers and any missing contact details; the
+server prices the item itself (hotel: nightly rate × nights; car: daily rate ×
+days, pick-up and drop-off day both counted, and the car must seat everyone;
+package: per-person price × travellers), adds tax, raises a pending booking and
+answers with a no-login payment link (`/pay/<token>/`, valid
+`PAYMENT_LINK_TTL_DAYS`, default 7). Agents can do the same from the
+conversation page (*Book this for the customer*), and copy or reissue the link
+from the booking page — reissuing kills the old link.
 
 ### 3. Humans take over when it matters
 
@@ -96,7 +121,16 @@ Asking for a person — or Claude deciding the chat needs one — moves the
 conversation to **Waiting** and notifies the team. From the inbox an agent can
 **Take over** (the AI stops replying), answer directly, then **Hand back to
 AI**. Every switch is recorded as a `ConversationHandoff`. The widget polls for
-agent replies, so the customer sees them without a page reload.
+agent replies, so the customer sees them without a page reload. While a chat is
+waiting for a person the AI stays quiet and tells the customer a consultant is
+coming. Managers assign or reassign chats from the inbox or the conversation
+page; the agent is notified.
+
+Under **AI Settings**, *handoff wait* and *agent idle* timers (minutes, 0 = never)
+let the AI take a chat back when nobody picks up a handoff, or when the agent
+leaves the customer unanswered. They are checked whenever the customer writes or
+the widget polls; `conversations.services.auto_resume_stale_conversations()` does
+the same sweep for a scheduler.
 
 ### 4. The CRM works the lead
 
@@ -203,7 +237,9 @@ GET  /api/v1/crm/{customers,leads,follow-ups}/ · /crm/leads/pipeline/
 GET  /api/v1/conversations/inbox/ · /{id}/
 POST /api/v1/conversations/{id}/handoff/       {"action": "take_over|resume_ai|close"}
 POST /api/v1/conversations/widget/chat/        public — widget key
-GET  /api/v1/conversations/widget/chat/        public — poll for agent replies
+GET  /api/v1/conversations/widget/history/     public — key + session; ?since=<id> to poll
+POST /api/v1/conversations/widget/book/        public — "Book this" on a card
+POST /api/v1/pay/{token}/order/ · verify/ · simulate/   public — payment link token
 GET  /api/v1/bookings/ · /bookings/{id}/
 POST /api/v1/bookings/payments/create/         {"booking_id": 1}
 POST /api/v1/bookings/payments/verify/         Razorpay checkout response
@@ -226,6 +262,9 @@ All settings come from `.env` (see `.env.example`).
 | `RAZORPAY_KEY_ID` / `_SECRET` | Payments run in simulation mode |
 | `RAZORPAY_WEBHOOK_SECRET` | Simulation mode: webhooks verified against the simulation secret. With live keys: every webhook is rejected |
 | `BOOKING_TAX_PERCENT` | Defaults to 5 |
+| `PAYMENT_LINK_TTL_DAYS` | Customer payment links last 7 days |
+| `THROTTLE_WIDGET_CHAT` / `_POLL` / `_BOOK`, `THROTTLE_PUBLIC_PAY` | Per-IP limits: `30/minute`, `120/minute`, `20/hour`, `60/hour` |
+| `NUM_PROXIES` | `1` (nginx in front). Set `0` when nothing sits in front of gunicorn, or clients could dodge rate limits with a forged `X-Forwarded-For` |
 | `DATABASE_URL` | SQLite; set a `postgres://` URL for Postgres |
 
 Before deploying: set `DEBUG=False`, a real `SECRET_KEY` and `ALLOWED_HOSTS`,

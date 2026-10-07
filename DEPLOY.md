@@ -424,6 +424,10 @@ Once live, each website's detail page shows the snippet. It should read:
         data-scared-title="Your Brand" defer></script>
 ```
 
+The page embedding it must be on that website's registered **domain** (or
+`www.`/a subdomain of it): the widget API only answers cross-origin requests
+from there, and silently fails anywhere else.
+
 ---
 
 ## Certificate renewal
