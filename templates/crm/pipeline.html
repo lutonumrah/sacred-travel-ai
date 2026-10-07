@@ -28,7 +28,8 @@
               <form method="post" action="{% url 'crm:lead_status' lead.pk %}" class="kanban-move">
                 {% csrf_token %}
                 <label class="sr-only" for="move-{{ lead.pk }}">Move “{{ lead.title }}” to</label>
-                <select id="move-{{ lead.pk }}" name="status" class="input">
+                {# autocomplete=off: Firefox otherwise restores menu values by position on reload, so a moved card shows another card's status. #}
+                <select id="move-{{ lead.pk }}" name="status" class="input" autocomplete="off">
                   {% for value, label in statuses %}<option value="{{ value }}" {% if value == lead.status %}selected{% endif %}>{{ label }}</option>{% endfor %}
                 </select>
                 <noscript><button class="btn small ghost" type="submit">Move</button></noscript>
