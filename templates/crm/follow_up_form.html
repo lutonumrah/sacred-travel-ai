@@ -1,0 +1,16 @@
+{% extends "layouts/base.html" %}
+
+{% block content %}
+  <div class="panel">
+    <form method="post">
+      {% csrf_token %}
+      <input type="hidden" name="next" value="{{ next }}">
+      {% include "partials/_form.html" with form=form %}
+      <p class="muted small">Moving the reminder (or the due time, if there is no reminder) later sends the reminder again at the new time.</p>
+      <div class="form-actions">
+        <button class="btn" type="submit">Save follow-up</button>
+        <a class="btn ghost" href="{% url 'crm:lead_detail' object.lead_id %}">Cancel</a>
+      </div>
+    </form>
+  </div>
+{% endblock %}

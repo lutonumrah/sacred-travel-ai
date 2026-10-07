@@ -23,7 +23,7 @@
               <td class="small">{{ lead.get_source_display }}</td>
               <td>{{ lead.destination|default:"—" }}</td>
               <td class="small nowrap">{{ lead.travel_start|date:"d M"|default:"—" }}{% if lead.travel_end %} → {{ lead.travel_end|date:"d M" }}{% endif %}</td>
-              <td class="small">{{ lead.assigned_to.get_username|default:"Unassigned" }}</td>
+              <td class="small">{{ lead.assigned_to.get_username|default:"Unassigned" }}{% if lead.assigned_team %}<div class="muted">{{ lead.assigned_team.name }}</div>{% endif %}</td>
               <td class="right">{{ lead.score }}</td>
               <td class="small nowrap">{{ lead.created_at|date:"d M Y" }}</td>
             </tr>

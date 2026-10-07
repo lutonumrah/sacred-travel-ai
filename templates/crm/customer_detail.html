@@ -1,11 +1,26 @@
 {% extends "layouts/base.html" %}
 
 {% block page_actions %}
-  <a class="btn ghost" href="{% url 'crm:customer_edit' customer.pk %}">Edit</a>
-  <a class="btn" href="{% url 'crm:lead_create' %}?customer={{ customer.pk }}">New lead</a>
+  {% if customer.is_deleted %}
+    <form method="post" action="{% url 'crm:customer_restore' customer.pk %}" class="inline-form">
+      {% csrf_token %}<button class="btn" type="submit">Restore customer</button>
+    </form>
+  {% else %}
+    <a class="btn ghost" href="{% url 'crm:customer_edit' customer.pk %}">Edit</a>
+    {% if user.is_manager %}
+      <form method="post" action="{% url 'crm:customer_archive' customer.pk %}" class="inline-form"
+            onsubmit="return confirm('Archive {{ customer.full_name|escapejs }}? Their leads, chats and bookings are kept.')">
+        {% csrf_token %}<button class="btn ghost" type="submit">Archive</button>
+      </form>
+    {% endif %}
+    <a class="btn" href="{% url 'crm:lead_create' %}?customer={{ customer.pk }}">New lead</a>
+  {% endif %}
 {% endblock %}
 
 {% block content %}
+  {% if customer.is_deleted %}
+    <ul class="messages"><li class="warning">Archived {{ customer.deleted_at|date:"d M Y" }} — hidden from customer lists and pickers. Restore to use this profile again.</li></ul>
+  {% endif %}
   <div class="split">
     <div>
       <div class="panel">

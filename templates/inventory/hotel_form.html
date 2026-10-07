@@ -18,6 +18,7 @@
                 <td class="small">{{ offer.valid_from|date:"d M Y"|default:"—" }} → {{ offer.valid_to|date:"d M Y"|default:"—" }}</td>
                 <td>{% if offer.is_active %}<span class="badge ok">Active</span>{% else %}<span class="badge grey">Off</span>{% endif %}</td>
                 <td class="actions">
+                  <a class="btn small ghost" href="{% url 'inventory:offer_edit' object.pk offer.pk %}">Edit</a>
                   <form method="post" action="{% url 'inventory:offer_delete' object.pk offer.pk %}" class="inline-form"
                         onsubmit="return confirm('Remove this offer?')">
                     {% csrf_token %}<button class="btn small danger" type="submit">Remove</button>

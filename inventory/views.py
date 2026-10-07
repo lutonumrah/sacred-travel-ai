@@ -183,6 +183,28 @@ class HotelOfferCreateView(InventoryEditorMixin, View):
         return redirect("inventory:hotel_edit", pk=pk)
 
 
+class HotelOfferUpdateView(InventoryEditorMixin, UpdateView):
+    model = HotelOffer
+    form_class = HotelOfferForm
+    template_name = "inventory/offer_form.html"
+    pk_url_kwarg = "offer_id"
+    page_title = "Edit Room Offer"
+    active_nav = "inventory"
+
+    def get_queryset(self):
+        return HotelOffer.objects.filter(
+            hotel_id=self.kwargs["pk"], hotel__is_deleted=False
+        ).select_related("hotel")
+
+    def get_page_subtitle(self):
+        return self.object.hotel.name
+
+    def form_valid(self, form):
+        form.save()
+        messages.success(self.request, "Offer updated.")
+        return redirect("inventory:hotel_edit", pk=self.kwargs["pk"])
+
+
 class HotelOfferDeleteView(InventoryEditorMixin, View):
     def post(self, request, pk, offer_id):
         offer = get_object_or_404(HotelOffer, pk=offer_id, hotel_id=pk)

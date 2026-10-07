@@ -535,6 +535,93 @@ from websites.services import issue_api_key  # noqa: E402
 from .models import LeadSource  # noqa: E402
 
 
+class PipelineBoardTests(LeadFixture):
+    def move(self, lead, status, **extra):
+        return self.client.post(
+            reverse("crm:lead_move", args=[lead.pk]), {"status": status, **extra}
+        )
+
+    def test_moving_a_card_uses_the_status_service(self):
+        lead = self.make_lead(assigned_to=self.agent)
+        self.client.force_login(self.agent)
+        response = self.move(lead, LeadStatus.QUALIFIED)
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertTrue(body["success"])
+        self.assertEqual(body["status"], "qualified")
+        self.assertEqual(body["from"], "new")
+        lead.refresh_from_db()
+        self.assertEqual(lead.status, LeadStatus.QUALIFIED)
+        self.assertTrue(
+            LeadActivity.objects.filter(lead=lead, activity_type="status_change").exists()
+        )
+
+    def test_lost_keeps_the_reason(self):
+        lead = self.make_lead(assigned_to=self.agent)
+        self.client.force_login(self.agent)
+        self.move(lead, LeadStatus.LOST, lost_reason="Went elsewhere")
+        lead.refresh_from_db()
+        self.assertEqual(lead.lost_reason, "Went elsewhere")
+
+    def test_an_invalid_status_is_rejected(self):
+        lead = self.make_lead(assigned_to=self.agent)
+        self.client.force_login(self.agent)
+        response = self.move(lead, "teleported")
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(response.json()["success"])
+        lead.refresh_from_db()
+        self.assertEqual(lead.status, LeadStatus.NEW)
+
+    def test_someone_elses_lead_cannot_be_moved(self):
+        lead = self.make_lead(assigned_to=self.other)
+        self.client.force_login(self.agent)
+        self.assertEqual(self.move(lead, LeadStatus.QUALIFIED).status_code, 404)
+        lead.refresh_from_db()
+        self.assertEqual(lead.status, LeadStatus.NEW)
+
+    def test_csrf_is_enforced(self):
+        lead = self.make_lead(assigned_to=self.agent)
+        client = Client(enforce_csrf_checks=True)
+        client.force_login(self.agent)
+        url = reverse("crm:lead_move", args=[lead.pk])
+        self.assertEqual(client.post(url, {"status": "qualified"}).status_code, 403)
+        page = client.get(reverse("crm:pipeline"))
+        token = page.cookies["csrftoken"].value
+        response = client.post(url, {"status": "qualified"}, HTTP_X_CSRFTOKEN=token)
+        self.assertEqual(response.status_code, 200)
+
+    def test_inventory_users_are_turned_away(self):
+        lead = self.make_lead()
+        stock = User.objects.create_user("stock", password="pw", role="inventory")
+        self.client.force_login(stock)
+        self.assertEqual(self.move(lead, LeadStatus.QUALIFIED).status_code, 302)
+        lead.refresh_from_db()
+        self.assertEqual(lead.status, LeadStatus.NEW)
+
+    def test_the_board_links_overflow_to_the_filtered_list(self):
+        for index in range(27):
+            self.make_lead(title=f"Lead {index}")
+        self.client.force_login(self.manager)
+        page = self.client.get(reverse("crm:pipeline"), {"website": self.website.pk})
+        self.assertContains(page, "+2 more")
+        self.assertContains(
+            page, f'href="/crm/leads/?status=new&amp;website={self.website.pk}"'
+        )
+        self.assertContains(page, 'draggable="true"', count=25)
+
+    def test_the_board_filters_like_the_leads_list(self):
+        team = Team.objects.create(name="North")
+        self.make_lead(title="Phone lead", source=LeadSource.PHONE)
+        self.make_lead(title="Team lead", assigned_team=team)
+        self.client.force_login(self.manager)
+        page = self.client.get(reverse("crm:pipeline"), {"source": "phone"})
+        self.assertContains(page, "Phone lead")
+        self.assertNotContains(page, "Team lead")
+        page = self.client.get(reverse("crm:pipeline"), {"team": team.pk})
+        self.assertContains(page, "Team lead")
+        self.assertNotContains(page, "Phone lead")
+
+
 class IntakeFixture(LeadFixture):
     def setUp(self):
         super().setUp()
@@ -651,3 +738,211 @@ class IntakeTests(IntakeFixture):
         codes = [self.submit(email=f"p{n}@example.com").status_code for n in range(3)]
         self.assertEqual(codes, [201, 201, 429])
         self.assertEqual(Lead.objects.count(), 2)
+
+
+class CustomerArchiveTests(LeadFixture):
+    def test_managers_archive_and_restore(self):
+        self.client.force_login(self.manager)
+        self.client.post(reverse("crm:customer_archive", args=[self.customer.pk]))
+        self.customer.refresh_from_db()
+        self.assertTrue(self.customer.is_deleted)
+        self.assertIsNotNone(self.customer.deleted_at)
+        self.assertTrue(AuditLog.objects.filter(action="customer.archive").exists())
+
+        listing = self.client.get(reverse("crm:customers"))
+        self.assertNotContains(listing, "ana@x.com")
+        listing = self.client.get(reverse("crm:customers"), {"archived": "on"})
+        self.assertContains(listing, "ana@x.com")
+        self.assertContains(listing, "Archived")
+        # Still reachable by a manager, to restore it.
+        page = self.client.get(reverse("crm:customer_detail", args=[self.customer.pk]))
+        self.assertContains(page, "Restore customer")
+
+        self.client.post(reverse("crm:customer_restore", args=[self.customer.pk]))
+        self.customer.refresh_from_db()
+        self.assertFalse(self.customer.is_deleted)
+        self.assertContains(self.client.get(reverse("crm:customers")), "ana@x.com")
+
+    def test_archived_customers_leave_the_pickers(self):
+        from crm.forms import LeadForm
+
+        services.archive_customer(customer=self.customer)
+        self.assertNotIn(self.customer, LeadForm().fields["customer"].queryset)
+        self.assertNotIn(self.customer, list_customers_for(self.agent))
+
+    def test_employees_cannot_archive(self):
+        self.client.force_login(self.agent)
+        response = self.client.post(reverse("crm:customer_archive", args=[self.customer.pk]))
+        self.assertRedirects(response, reverse("dashboard:overview"))
+        self.customer.refresh_from_db()
+        self.assertFalse(self.customer.is_deleted)
+        # Nor can they see archived ones by asking.
+        services.archive_customer(customer=self.customer)
+        listing = self.client.get(reverse("crm:customers"), {"archived": "on"})
+        self.assertNotContains(listing, "ana@x.com")
+
+
+def list_customers_for(user):
+    from .selectors import list_customers
+
+    return list(list_customers(user=user))
+
+
+class FollowUpEditTests(LeadFixture):
+    def setUp(self):
+        super().setUp()
+        self.lead = self.make_lead(assigned_to=self.agent)
+        self.due = timezone.now() + timedelta(days=1)
+        self.task = FollowUpTask.objects.create(
+            lead=self.lead,
+            assigned_to=self.agent,
+            title="Call back",
+            due_at=self.due,
+            reminder_at=self.due - timedelta(hours=1),
+            reminded_at=timezone.now(),
+        )
+        self.client.force_login(self.agent)
+        self.url = reverse("crm:follow_up_edit", args=[self.task.pk])
+
+    def edit(self, **fields):
+        data = {
+            "title": "Call back",
+            "assigned_to": self.agent.pk,
+            "due_at": timezone.localtime(self.due).strftime("%Y-%m-%dT%H:%M"),
+            "reminder_at": timezone.localtime(self.due - timedelta(hours=1)).strftime(
+                "%Y-%m-%dT%H:%M"
+            ),
+            "notes": "",
+        }
+        data.update(fields)
+        return self.client.post(self.url, data)
+
+    def test_moving_the_reminder_later_rearms_it(self):
+        later = timezone.localtime(self.due + timedelta(days=1))
+        response = self.edit(
+            title="Call back (rescheduled)",
+            due_at=later.strftime("%Y-%m-%dT%H:%M"),
+            reminder_at=(later - timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M"),
+            notes="Customer asked for Friday",
+        )
+        self.assertRedirects(response, reverse("crm:lead_detail", args=[self.lead.pk]))
+        self.task.refresh_from_db()
+        self.assertEqual(self.task.title, "Call back (rescheduled)")
+        self.assertEqual(self.task.notes, "Customer asked for Friday")
+        self.assertIsNone(self.task.reminded_at)
+        self.assertTrue(
+            LeadActivity.objects.filter(lead=self.lead, activity_type="follow_up_updated").exists()
+        )
+
+    def test_clearing_the_reminder_falls_back_to_the_later_due_time(self):
+        self.edit(reminder_at="")
+        self.task.refresh_from_db()
+        self.assertIsNone(self.task.reminder_at)
+        self.assertIsNone(self.task.reminded_at)
+
+    def test_moving_it_earlier_keeps_the_sent_reminder(self):
+        self.edit(
+            reminder_at=timezone.localtime(self.due - timedelta(hours=5)).strftime(
+                "%Y-%m-%dT%H:%M"
+            )
+        )
+        self.task.refresh_from_db()
+        self.assertIsNotNone(self.task.reminded_at)
+
+    def test_a_reminder_after_the_due_time_is_rejected(self):
+        response = self.edit(
+            reminder_at=timezone.localtime(self.due + timedelta(hours=1)).strftime(
+                "%Y-%m-%dT%H:%M"
+            )
+        )
+        self.assertEqual(response.status_code, 200)
+        self.task.refresh_from_db()
+        self.assertIsNotNone(self.task.reminded_at)
+
+    def test_reassigning_notifies_the_new_assignee(self):
+        Notification.objects.all().delete()
+        self.edit(assigned_to=self.manager.pk)
+        self.assertTrue(
+            Notification.objects.filter(
+                recipient=self.manager, notification_type="follow_up"
+            ).exists()
+        )
+
+    def test_someone_elses_task_cannot_be_edited(self):
+        theirs = FollowUpTask.objects.create(
+            lead=self.make_lead(assigned_to=self.other),
+            assigned_to=self.other,
+            title="Theirs",
+            due_at=self.due,
+        )
+        response = self.client.get(reverse("crm:follow_up_edit", args=[theirs.pk]))
+        self.assertEqual(response.status_code, 404)
+
+    def test_the_next_url_is_followed_only_inside_the_site(self):
+        response = self.edit(next="/crm/follow-ups/")
+        self.assertRedirects(response, reverse("crm:follow_ups"))
+        response = self.edit(next="https://evil.com/")
+        self.assertRedirects(response, reverse("crm:lead_detail", args=[self.lead.pk]))
+
+
+class TeamAssignmentTests(LeadFixture):
+    def setUp(self):
+        super().setUp()
+        self.team = Team.objects.create(name="North")
+        self.team.members.add(self.agent, self.other)
+        self.outsider = User.objects.create_user("outsider", password="pw", role="employee")
+
+    def test_team_members_see_the_teams_leads_and_their_follow_ups(self):
+        lead = self.make_lead(assigned_to=self.manager)
+        services.assign_lead(lead=lead, user=self.manager, team=self.team, actor=self.manager)
+        task = FollowUpTask.objects.create(
+            lead=lead, assigned_to=self.manager, title="Quote", due_at=timezone.now()
+        )
+        for member in (self.agent, self.other):
+            self.assertIn(lead, list_leads(user=member))
+        self.assertNotIn(lead, list_leads(user=self.outsider))
+        from .selectors import visible_follow_ups
+
+        self.assertIn(task, visible_follow_ups(self.agent))
+        self.assertNotIn(task, visible_follow_ups(self.outsider))
+        self.client.force_login(self.agent)
+        self.assertEqual(
+            self.client.get(reverse("crm:lead_detail", args=[lead.pk])).status_code, 200
+        )
+
+    def test_assigning_to_a_team_notifies_its_members(self):
+        lead = self.make_lead()
+        Notification.objects.all().delete()
+        services.assign_lead(lead=lead, team=self.team, actor=self.agent)
+        recipients = set(Notification.objects.values_list("recipient__username", flat=True))
+        # The member who did it is not told about their own action.
+        self.assertEqual(recipients, {"other"})
+        # Re-saving the same team is not news.
+        Notification.objects.all().delete()
+        services.assign_lead(lead=lead, team=self.team, actor=self.manager)
+        self.assertFalse(Notification.objects.exists())
+
+    def test_a_new_lead_for_a_team_notifies_its_members(self):
+        Notification.objects.all().delete()
+        self.make_lead(assigned_team=self.team)
+        recipients = set(Notification.objects.values_list("recipient__username", flat=True))
+        self.assertIn("agent", recipients)
+        self.assertIn("other", recipients)
+
+    def test_the_leads_list_filters_by_team(self):
+        self.make_lead(title="Team lead", assigned_team=self.team)
+        self.make_lead(title="Loose lead")
+        self.client.force_login(self.manager)
+        page = self.client.get(reverse("crm:leads"), {"team": self.team.pk})
+        self.assertContains(page, "Team lead")
+        self.assertNotContains(page, "Loose lead")
+        body = self.client.get(reverse("api_crm:leads"), {"team": self.team.pk}).json()
+        self.assertEqual([row["title"] for row in body["data"]["results"]], ["Team lead"])
+
+    def test_manual_leads_can_use_any_configured_source(self):
+        from crm.forms import LeadForm
+
+        self.assertEqual(
+            {value for value, _label in LeadForm().fields["source"].choices if value},
+            {value for value, _label in LeadSource.choices},
+        )

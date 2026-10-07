@@ -55,10 +55,20 @@ def sees_everything(user):
 
 
 def visible_leads(user):
-    """Managers see every lead; employees their own and unassigned ones."""
+    """Managers see every lead; employees their own, unassigned ones and their teams'.
+
+    A lead handed to a team (with or without a named owner) is visible to every
+    member of that team, and with it its follow-ups and bookings.
+    """
     queryset = Lead.objects.filter(is_deleted=False)
     if not sees_everything(user):
-        queryset = queryset.filter(Q(assigned_to=user) | Q(assigned_to__isnull=True))
+        from accounts.models import Team
+
+        queryset = queryset.filter(
+            Q(assigned_to=user)
+            | Q(assigned_to__isnull=True)
+            | Q(assigned_team__in=Team.objects.filter(members=user).values("pk"))
+        )
     return queryset
 
 
@@ -71,13 +81,16 @@ def visible_follow_ups(user):
     return queryset
 
 
-def visible_customers(user):
+def visible_customers(user, *, include_archived=False):
     """A customer is visible through any lead, chat or booking the user can see.
 
     Customers with no history at all are visible too, so an employee can open the
-    profile they just created before any lead exists.
+    profile they just created before any lead exists. Archived customers are
+    left out unless asked for; only managers archive or restore them.
     """
-    queryset = Customer.objects.filter(is_deleted=False)
+    queryset = Customer.objects.all()
+    if not include_archived:
+        queryset = queryset.filter(is_deleted=False)
     if sees_everything(user):
         return queryset
     # Imported lazily: both modules import crm models.
@@ -92,10 +105,13 @@ def visible_customers(user):
     ).distinct()
 
 
-def list_customers(*, q="", city="", user=None):
-    queryset = (
-        visible_customers(user) if user is not None else Customer.objects.filter(is_deleted=False)
-    )
+def list_customers(*, q="", city="", user=None, include_archived=False):
+    if user is not None:
+        queryset = visible_customers(user, include_archived=include_archived)
+    else:
+        queryset = Customer.objects.all()
+        if not include_archived:
+            queryset = queryset.filter(is_deleted=False)
     if q:
         queryset = queryset.filter(
             Q(first_name__icontains=q)
@@ -119,6 +135,7 @@ def list_leads(
     website=None,
     created_from=None,
     created_to=None,
+    team=None,
     user=None,
 ):
     queryset = (
@@ -147,6 +164,8 @@ def list_leads(
         queryset = queryset.filter(assigned_to=assigned_to)
     if website:
         queryset = queryset.filter(website=website)
+    if team:
+        queryset = queryset.filter(assigned_team=team)
     if created_from:
         queryset = queryset.filter(created_at__date__gte=created_from)
     if created_to:
@@ -154,18 +173,31 @@ def list_leads(
     return queryset
 
 
-def pipeline_columns(*, user=None, website=None):
-    """Leads bucketed by status, in pipeline order, for the kanban board."""
-    leads = list_leads(user=user, website=website)
-    buckets = {status: [] for status in PIPELINE_ORDER}
-    for lead in leads[:500]:
-        buckets.setdefault(lead.status, []).append(lead)
+PIPELINE_CARDS_PER_COLUMN = 25
+
+
+def pipeline_columns(
+    *, user=None, website=None, source="", assigned_to=None, team=None,
+    limit=PIPELINE_CARDS_PER_COLUMN,
+):
+    """Leads bucketed by status, in pipeline order, for the kanban board.
+
+    Each column holds its `limit` newest cards; `count` is the column's full
+    size, so the board can link to the rest.
+    """
+    leads = list_leads(
+        user=user, website=website, source=source, assigned_to=assigned_to, team=team
+    )
+    counts = dict(
+        leads.order_by().values_list("status").annotate(total=Count("id"))
+    )
     return [
         {
             "status": status,
             "label": LeadStatus(status).label,
-            "leads": buckets.get(status, []),
-            "count": len(buckets.get(status, [])),
+            "leads": list(leads.filter(status=status)[:limit]) if counts.get(status) else [],
+            "count": counts.get(status, 0),
+            "more": max(0, counts.get(status, 0) - limit),
         }
         for status in PIPELINE_ORDER
     ]

@@ -12,7 +12,8 @@
         <tbody>
           {% for customer in page_obj %}
             <tr>
-              <td><strong><a href="{% url 'crm:customer_detail' customer.pk %}">{{ customer.full_name }}</a></strong></td>
+              <td><strong><a href="{% url 'crm:customer_detail' customer.pk %}">{{ customer.full_name }}</a></strong>
+                {% if customer.is_deleted %} <span class="badge grey">Archived</span>{% endif %}</td>
               <td>{{ customer.email|default:"—" }}</td>
               <td>{{ customer.phone|default:"—" }}</td>
               <td>{{ customer.city|default:"—" }}</td>

@@ -92,6 +92,7 @@
             <strong>{{ task.title }}</strong>
             <div class="muted small">Due {{ task.due_at|date:"d M Y H:i" }} · {{ task.assigned_to.get_username|default:"unassigned" }}</div>
             {% if not task.is_completed %}
+              <a class="btn small ghost" href="{% url 'crm:follow_up_edit' task.pk %}?next={{ request.path|urlencode }}">Edit</a>
               <form method="post" action="{% url 'crm:follow_up_complete' task.pk %}" class="inline-form">
                 {% csrf_token %}
                 <input type="hidden" name="next" value="{{ request.path }}">

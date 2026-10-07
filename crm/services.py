@@ -95,6 +95,8 @@ def create_lead(*, lead, actor=None, request=None, activity_summary=None):
         request=request,
     )
     link = reverse("crm:lead_detail", args=[lead.pk])
+    if lead.assigned_team:
+        notify_team(lead=lead, team=lead.assigned_team, actor=actor, skip=[lead.assigned_to])
     if lead.assigned_to:
         notify(
             recipient=lead.assigned_to,
@@ -128,7 +130,31 @@ def update_lead(*, lead, actor=None, request=None, changed_fields=None):
         details={"changed": list(changed_fields or [])},
     )
     log_audit(actor=actor, action="lead.update", entity=lead, request=request)
+    if "assigned_team" in (changed_fields or []) and lead.assigned_team:
+        notify_team(lead=lead, team=lead.assigned_team, actor=actor, skip=[lead.assigned_to])
     return lead
+
+
+def notify_team(*, lead, team, actor=None, skip=()):
+    """Tell a team's active members a lead is now theirs (they can all see it)."""
+    skip_ids = {user.pk for user in skip if user is not None}
+    if actor is not None and actor.is_authenticated:
+        skip_ids.add(actor.pk)
+    members = [
+        member
+        for member in team.members.filter(is_active=True, is_active_employee=True)
+        if member.pk not in skip_ids
+    ]
+    if not members:
+        return []
+    return notify_many(
+        recipients=members,
+        notification_type="lead",
+        title=f"Lead assigned to {team.name}: {lead.title}",
+        body=lead.destination or "",
+        link=reverse("crm:lead_detail", args=[lead.pk]),
+        metadata={"lead_id": lead.pk, "team_id": team.pk},
+    )
 
 
 @transaction.atomic
@@ -224,6 +250,7 @@ def qualify_if_ready(*, lead, requirements, request=None):
 
 @transaction.atomic
 def assign_lead(*, lead, user=None, team=None, actor=None, request=None):
+    previous_team_id = lead.assigned_team_id
     lead.assigned_to = user
     lead.assigned_team = team
     lead.save(update_fields=["assigned_to", "assigned_team", "updated_at"])
@@ -251,6 +278,8 @@ def assign_lead(*, lead, user=None, team=None, actor=None, request=None):
             link=reverse("crm:lead_detail", args=[lead.pk]),
             metadata={"lead_id": lead.pk},
         )
+    if team is not None and team.pk != previous_team_id:
+        notify_team(lead=lead, team=team, actor=actor, skip=[user])
     return lead
 
 
@@ -285,6 +314,46 @@ def create_follow_up(*, task, actor=None, request=None):
             notification_type="follow_up",
             title=f"Follow-up: {task.title}",
             body=f"Due {task.due_at:%d %b %Y %H:%M}",
+            link=reverse("crm:lead_detail", args=[task.lead_id]),
+            metadata={"task_id": task.pk},
+        )
+    return task
+
+
+@transaction.atomic
+def update_follow_up(
+    *, task, previous_due, previous_reminder=None, previous_assignee_id=None,
+    actor=None, request=None,
+):
+    """Save an edited follow-up.
+
+    If the moment its reminder fires (reminder time, else due time) moved
+    later, a reminder already sent no longer counts: it will fire again.
+    """
+    before = previous_reminder or previous_due
+    after = task.reminder_at or task.due_at
+    rearmed = bool(task.reminded_at and after > before)
+    if rearmed:
+        task.reminded_at = None
+    task.save()
+    record_activity(
+        lead=task.lead,
+        actor=actor,
+        activity_type="follow_up_updated",
+        summary=f"Follow-up updated: {task.title}",
+        details={"task_id": task.pk, "due_at": task.due_at.isoformat(), "reminder_reset": rearmed},
+    )
+    log_audit(actor=actor, action="follow_up.update", entity=task, request=request)
+    if (
+        task.assigned_to
+        and task.assigned_to_id != previous_assignee_id
+        and task.assigned_to != actor
+    ):
+        notify(
+            recipient=task.assigned_to,
+            notification_type="follow_up",
+            title=f"Follow-up: {task.title}",
+            body=f"Due {timezone.localtime(task.due_at):%d %b %Y %H:%M}",
             link=reverse("crm:lead_detail", args=[task.lead_id]),
             metadata={"task_id": task.pk},
         )

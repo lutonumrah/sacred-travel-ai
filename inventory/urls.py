@@ -17,6 +17,11 @@ urlpatterns = [
     path("hotels/<int:pk>/edit/", views.HotelUpdateView.as_view(), name="hotel_edit"),
     path("hotels/<int:pk>/offers/add/", views.HotelOfferCreateView.as_view(), name="offer_create"),
     path(
+        "hotels/<int:pk>/offers/<int:offer_id>/edit/",
+        views.HotelOfferUpdateView.as_view(),
+        name="offer_edit",
+    ),
+    path(
         "hotels/<int:pk>/offers/<int:offer_id>/delete/",
         views.HotelOfferDeleteView.as_view(),
         name="offer_delete",

@@ -1,0 +1,3 @@
+{% extends "layouts/form_page.html" %}
+{% block submit_label %}Save offer{% endblock %}
+{% block cancel_url %}{% url 'inventory:hotel_edit' object.hotel_id %}{% endblock %}

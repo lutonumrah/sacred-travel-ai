@@ -31,6 +31,13 @@ class CustomerForm(StyledModelForm):
 class CustomerFilterForm(StyledFormMixin, forms.Form):
     q = forms.CharField(required=False, label="Search")
     city = forms.CharField(required=False)
+    archived = forms.BooleanField(required=False, label="Include archived")
+
+    def __init__(self, *args, user=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Archiving is a manager action; nobody else sees archived customers.
+        if user is not None and not user.is_manager:
+            del self.fields["archived"]
 
 
 class LeadForm(StyledModelForm):
@@ -88,17 +95,29 @@ class LeadFilterForm(StyledFormMixin, forms.Form):
     assigned_to = forms.ModelChoiceField(
         required=False, queryset=None, empty_label="Anyone"
     )
+    team = forms.ModelChoiceField(required=False, queryset=None, empty_label="Any team")
     website = forms.ModelChoiceField(required=False, queryset=None, empty_label="All websites")
     created_from = forms.DateField(required=False, widget=DateInput())
     created_to = forms.DateField(required=False, widget=DateInput())
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        from accounts.models import Team
         from accounts.selectors import assignable_users
         from websites.selectors import list_websites
 
         self.fields["assigned_to"].queryset = assignable_users()
+        self.fields["team"].queryset = Team.objects.filter(is_active=True)
         self.fields["website"].queryset = list_websites()
+
+
+class PipelineFilterForm(LeadFilterForm):
+    """The board's filters: the leads list's, minus the ones the columns replace."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        for name in ("q", "status", "destination", "created_from", "created_to"):
+            del self.fields[name]
 
 
 class LeadNoteForm(StyledModelForm):

@@ -40,7 +40,7 @@ class CustomerDetailAPI(EnvelopeMixin, generics.RetrieveAPIView):
 
 class LeadListAPI(EnvelopeMixin, generics.ListAPIView):
     """Same filters as the leads page: q, status, source, destination,
-    assigned_to (user id), website (id), created_from / created_to (YYYY-MM-DD)."""
+    assigned_to (user id), team (id), website (id), created_from / created_to (YYYY-MM-DD)."""
 
     permission_classes = [IsSalesTeam]
     serializer_class = LeadSerializer
@@ -59,6 +59,7 @@ class LeadListAPI(EnvelopeMixin, generics.ListAPIView):
             website=data.get("website"),
             created_from=data.get("created_from"),
             created_to=data.get("created_to"),
+            team=data.get("team"),
             user=self.request.user,
         )
 

@@ -1,30 +1,48 @@
 {% extends "layouts/base.html" %}
+{% load static %}
 
 {% block page_actions %}
-  <a class="btn ghost" href="{% url 'crm:leads' %}">Table view</a>
+  <a class="btn ghost" href="{% url 'crm:leads' %}{% if filter_query %}?{{ filter_query }}{% endif %}">Table view</a>
   <a class="btn" href="{% url 'crm:lead_create' %}">Add lead</a>
 {% endblock %}
 
 {% block content %}
-  <div class="kanban">
+  {% include "partials/_filters.html" %}
+  <p class="muted small">Drag a card to another column, or use the status menu on the card.</p>
+  <p id="pipeline-status" class="sr-only" role="status" aria-live="polite"></p>
+  <div class="kanban" id="pipeline" data-move-url="{% url 'crm:lead_move' 0 %}">
+    {% csrf_token %}
     {% for column in columns %}
-      <div class="kanban-col">
-        <h3>{{ column.label }} <span class="badge status-{{ column.status }}">{{ column.count }}</span></h3>
-        {% for lead in column.leads|slice:":25" %}
-          <div class="kanban-card">
-            <span class="score">{{ lead.score }}</span>
-            <strong><a href="{% url 'crm:lead_detail' lead.pk %}">{{ lead.title }}</a></strong>
-            <div class="meta">
-              {% if lead.customer %}{{ lead.customer.full_name }}{% else %}No customer{% endif %}
-              {% if lead.destination %} · {{ lead.destination }}{% endif %}
+      <div class="kanban-col" data-status="{{ column.status }}">
+        <h3>{{ column.label }} <span class="badge status-{{ column.status }}" data-count>{{ column.count }}</span></h3>
+        <div class="kanban-list" data-dropzone>
+          {% for lead in column.leads %}
+            <div class="kanban-card" draggable="true" data-lead="{{ lead.pk }}" data-status="{{ lead.status }}">
+              <span class="score">{{ lead.score }}</span>
+              <strong><a href="{% url 'crm:lead_detail' lead.pk %}">{{ lead.title }}</a></strong>
+              <div class="meta">
+                {% if lead.customer %}{{ lead.customer.full_name }}{% else %}No customer{% endif %}
+                {% if lead.destination %} · {{ lead.destination }}{% endif %}
+              </div>
+              <div class="meta">{{ lead.assigned_to.get_username|default:"Unassigned" }}{% if lead.assigned_team %} · {{ lead.assigned_team.name }}{% endif %} · {{ lead.created_at|date:"d M" }}</div>
+              <form method="post" action="{% url 'crm:lead_status' lead.pk %}" class="kanban-move">
+                {% csrf_token %}
+                <label class="sr-only" for="move-{{ lead.pk }}">Move “{{ lead.title }}” to</label>
+                <select id="move-{{ lead.pk }}" name="status" class="input">
+                  {% for value, label in statuses %}<option value="{{ value }}" {% if value == lead.status %}selected{% endif %}>{{ label }}</option>{% endfor %}
+                </select>
+                <noscript><button class="btn small ghost" type="submit">Move</button></noscript>
+              </form>
             </div>
-            <div class="meta">{{ lead.assigned_to.get_username|default:"Unassigned" }} · {{ lead.created_at|date:"d M" }}</div>
-          </div>
-        {% empty %}
-          <p class="muted small">Empty</p>
-        {% endfor %}
-        {% if column.count > 25 %}<p class="muted small">+{{ column.count|add:"-25" }} more</p>{% endif %}
+          {% endfor %}
+        </div>
+        <p class="muted small kanban-empty" {% if column.leads %}hidden{% endif %}>Empty</p>
+        {% if column.more %}
+          <a class="small" href="{% url 'crm:leads' %}?status={{ column.status }}{% if filter_query %}&amp;{{ filter_query }}{% endif %}">+{{ column.more }} more</a>
+        {% endif %}
       </div>
     {% endfor %}
   </div>
 {% endblock %}
+
+{% block scripts %}<script src="{% static 'js/pipeline.js' %}" defer></script>{% endblock %}

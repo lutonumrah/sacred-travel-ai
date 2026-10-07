@@ -160,8 +160,12 @@ customer has gone quiet on is handed back too.
 ### 4. The CRM works the lead
 
 Leads move through **New → Qualified → Interested → Payment Pending →
-Converted / Follow-up / Lost**, as a table or a kanban board. Every status
-change, assignment and note is written to an activity timeline.
+Converted / Follow-up / Lost**, as a table or a kanban board. On the board,
+drag a card to another column (or use the status menu on the card); it is
+saved at once and snaps back if the server refuses. The board takes the same
+assignee, team, website and source filters as the list, and a column's
+"+N more" opens the filtered list. Every status change, assignment and note is
+written to an activity timeline.
 
 Each lead carries a 0–100 **score** — points for reachable contact details,
 known dates, a stated budget and pipeline position — so the pipeline sorts
@@ -170,8 +174,11 @@ reminder time (or, without one, its due time) passes, the scheduler reminds the
 assignee — or the lead's owner, or the managers if nobody owns it — once, in
 the app and by email.
 
-Employees only see leads assigned to them or unassigned; managers and admins
-see everything.
+Employees only see leads assigned to them, to a team they belong to, or
+unassigned; managers and admins see everything. Assigning a lead to a team
+notifies its members. Follow-ups can be edited; moving the reminder later
+sends it again. Managers can archive a customer (hidden from lists and
+pickers, history kept) and restore them.
 
 ### 5. Inventory decides what can be sold
 

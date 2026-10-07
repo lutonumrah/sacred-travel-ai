@@ -178,3 +178,58 @@ class InventoryViewTests(InventoryFixture):
             self.client.get(url, {"limit": "abc", "website": "x"})
             self.assertEqual(search.call_args.kwargs["limit"], 30)
 
+
+
+class HotelOfferEditTests(InventoryFixture):
+    def setUp(self):
+        super().setUp()
+        from .models import HotelOffer
+
+        self.hotel = self.cheap
+        self.stock = User.objects.create_user("stock", password="pw", role="inventory")
+        self.employee = User.objects.create_user("emp", password="pw", role="employee")
+
+        self.offer = HotelOffer.objects.create(
+            hotel=self.hotel, title="Monsoon deal", room_type="Deluxe", price=Decimal("4000")
+        )
+        self.url = reverse("inventory:offer_edit", args=[self.hotel.pk, self.offer.pk])
+
+    def post(self, **fields):
+        data = {
+            "title": "Monsoon deal",
+            "room_type": "Deluxe",
+            "price": "4000",
+            "currency": "INR",
+            "valid_from": "",
+            "valid_to": "",
+            "inclusions": "",
+            "is_active": "on",
+        }
+        data.update(fields)
+        return self.client.post(self.url, data)
+
+    def test_inventory_editors_can_edit_an_offer(self):
+        self.client.force_login(self.stock)
+        self.assertContains(self.client.get(self.url), "Monsoon deal")
+        response = self.post(title="Monsoon saver", price="3500", inclusions="Breakfast")
+        self.assertRedirects(response, reverse("inventory:hotel_edit", args=[self.hotel.pk]))
+        self.offer.refresh_from_db()
+        self.assertEqual(self.offer.title, "Monsoon saver")
+        self.assertEqual(self.offer.price, Decimal("3500"))
+        self.assertEqual(self.offer.inclusions, "Breakfast")
+        page = self.client.get(reverse("inventory:hotel_edit", args=[self.hotel.pk]))
+        self.assertContains(page, self.url)
+
+    def test_the_offer_must_belong_to_the_hotel_in_the_url(self):
+        other = Hotel.objects.create(
+            name="Other", destination=self.hotel.destination, base_price=Decimal("1")
+        )
+        self.client.force_login(self.stock)
+        url = reverse("inventory:offer_edit", args=[other.pk, self.offer.pk])
+        self.assertEqual(self.client.get(url).status_code, 404)
+
+    def test_employees_cannot_edit_offers(self):
+        self.client.force_login(self.employee)
+        self.post(title="Hacked")
+        self.offer.refresh_from_db()
+        self.assertEqual(self.offer.title, "Monsoon deal")

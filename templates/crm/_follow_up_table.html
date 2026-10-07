@@ -10,6 +10,7 @@
           <td class="small nowrap">{{ task.due_at|date:"d M Y H:i" }}</td>
           <td class="actions">
             {% if not task.is_completed %}
+              <a class="btn small ghost" href="{% url 'crm:follow_up_edit' task.pk %}?next={{ request.get_full_path|urlencode }}">Edit</a>
               <form method="post" action="{% url 'crm:follow_up_complete' task.pk %}" class="inline-form">
                 {% csrf_token %}
                 <input type="hidden" name="next" value="{{ request.get_full_path }}">

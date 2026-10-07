@@ -1,4 +1,7 @@
+from urllib.parse import urlencode
+
 from django.contrib import messages
+from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse, reverse_lazy
 from django.views import View
@@ -14,14 +17,16 @@ from . import selectors, services
 from .forms import (
     CustomerFilterForm,
     CustomerForm,
+    FollowUpEditForm,
     FollowUpTaskForm,
     LeadAssignForm,
     LeadFilterForm,
     LeadForm,
     LeadNoteForm,
     LeadStatusForm,
+    PipelineFilterForm,
 )
-from .models import Customer, Lead
+from .models import Customer, FollowUpTask, Lead, LeadStatus
 
 
 def _lead_redirect(request, pk):
@@ -47,13 +52,14 @@ class CustomerListView(SalesRequiredMixin, TemplateView):
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
-        form = CustomerFilterForm(self.request.GET or None)
+        form = CustomerFilterForm(self.request.GET or None, user=self.request.user)
         form.is_valid()
         data = form.cleaned_data if form.is_bound and form.is_valid() else {}
         queryset = selectors.list_customers(
             q=data.get("q", "") or "",
             city=data.get("city", "") or "",
             user=self.request.user,
+            include_archived=bool(data.get("archived")) and self.request.user.is_manager,
         )
         ctx["filter_form"] = form
         ctx["page_obj"] = paginate(queryset, self.request.GET.get("page"))
@@ -100,7 +106,10 @@ class CustomerDetailView(SalesRequiredMixin, DetailView):
     active_nav = "crm"
 
     def get_queryset(self):
-        return selectors.visible_customers(self.request.user)
+        # Managers can still open an archived profile, to restore it.
+        return selectors.visible_customers(
+            self.request.user, include_archived=self.request.user.is_manager
+        )
 
     def get_page_title(self):
         return self.object.full_name
@@ -117,6 +126,26 @@ class CustomerDetailView(SalesRequiredMixin, DetailView):
         ctx["bookings"] = visible_bookings(user).filter(customer=self.object)[:20]
         ctx["conversations"] = visible_conversations(user).filter(customer=self.object)[:20]
         return ctx
+
+
+class CustomerArchiveView(ManagerRequiredMixin, View):
+    """Archive (soft delete) or restore a customer. Leads, chats and bookings stay."""
+
+    restore = False
+
+    def post(self, request, pk):
+        customer = get_object_or_404(
+            selectors.visible_customers(request.user, include_archived=True), pk=pk
+        )
+        if self.restore:
+            services.restore_customer(customer=customer, actor=request.user, request=request)
+            messages.success(request, f"{customer.full_name} restored.")
+        else:
+            services.archive_customer(customer=customer, actor=request.user, request=request)
+            messages.success(
+                request, f"{customer.full_name} archived — hidden from lists and pickers."
+            )
+        return redirect("crm:customer_detail", pk=pk)
 
 
 class LeadListView(SalesRequiredMixin, TemplateView):
@@ -139,24 +168,87 @@ class LeadListView(SalesRequiredMixin, TemplateView):
             website=data.get("website"),
             created_from=data.get("created_from"),
             created_to=data.get("created_to"),
+            team=data.get("team"),
             user=self.request.user,
         )
         ctx["filter_form"] = form
         ctx["page_obj"] = paginate(queryset, self.request.GET.get("page"))
         ctx["total"] = queryset.count()
+        ctx["querystring"] = _querystring(self.request, exclude=("page",))
         return ctx
+
+
+def _querystring(request, exclude=()):
+    return urlencode(
+        [(key, value) for key, value in request.GET.items() if key not in exclude and value]
+    )
 
 
 class LeadPipelineView(SalesRequiredMixin, TemplateView):
     template_name = "crm/pipeline.html"
     page_title = "Lead Pipeline"
-    page_subtitle = "New → Qualified → Interested → Payment Pending → Converted / Follow-up / Lost."
+    page_subtitle = (
+        "Drag a card to move it: New → Qualified → Interested → Payment Pending → "
+        "Converted / Follow-up / Lost."
+    )
     active_nav = "crm"
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
-        ctx["columns"] = selectors.pipeline_columns(user=self.request.user)
+        form = PipelineFilterForm(self.request.GET or None)
+        data = form.cleaned_data if form.is_bound and form.is_valid() else {}
+        ctx["filter_form"] = form
+        ctx["columns"] = selectors.pipeline_columns(
+            user=self.request.user,
+            website=data.get("website"),
+            source=data.get("source") or "",
+            assigned_to=data.get("assigned_to"),
+            team=data.get("team"),
+        )
+        # "+N more" opens the leads list with the board's filters plus the column.
+        ctx["filter_query"] = urlencode(
+            [
+                (name, self.request.GET[name])
+                for name in form.fields
+                if data.get(name) and self.request.GET.get(name)
+            ]
+        )
+        ctx["statuses"] = LeadStatus.choices
+        ctx["cards_per_column"] = selectors.PIPELINE_CARDS_PER_COLUMN
         return ctx
+
+
+class LeadMoveView(SalesRequiredMixin, View):
+    """The pipeline board's drag-and-drop: JSON in, JSON out."""
+
+    def post(self, request, pk):
+        lead = selectors.visible_leads(request.user).filter(pk=pk).first()
+        if lead is None:
+            return JsonResponse({"success": False, "message": "Lead not found."}, status=404)
+        form = LeadStatusForm(request.POST)
+        if not form.is_valid():
+            return JsonResponse(
+                {"success": False, "message": "Choose a valid status.", "errors": form.errors},
+                status=400,
+            )
+        previous = lead.status
+        services.change_status(
+            lead=lead,
+            status=form.cleaned_data["status"],
+            lost_reason=form.cleaned_data.get("lost_reason", ""),
+            actor=request.user,
+            request=request,
+        )
+        return JsonResponse(
+            {
+                "success": True,
+                "id": lead.pk,
+                "from": previous,
+                "status": lead.status,
+                "status_display": lead.get_status_display(),
+                "score": lead.score,
+            }
+        )
 
 
 class LeadCreateView(SalesRequiredMixin, CreateView):
@@ -332,6 +424,45 @@ class FollowUpCreateView(SalesRequiredMixin, View):
         else:
             messages.error(request, form.errors.as_text())
         return redirect(_safe_next(request))
+
+
+class FollowUpUpdateView(SalesRequiredMixin, UpdateView):
+    model = FollowUpTask
+    form_class = FollowUpEditForm
+    template_name = "crm/follow_up_form.html"
+    page_title = "Edit Follow-up"
+    active_nav = "crm"
+
+    def get_queryset(self):
+        return selectors.visible_follow_ups(self.request.user).select_related("lead")
+
+    def get_page_subtitle(self):
+        return f"For lead: {self.object.lead.title}"
+
+    def get_object(self, queryset=None):
+        task = super().get_object(queryset)
+        # Captured before the form writes the new values onto the instance.
+        self.previous = (task.due_at, task.reminder_at, task.assigned_to_id)
+        return task
+
+    def form_valid(self, form):
+        due, reminder, assignee_id = self.previous
+        self.object = services.update_follow_up(
+            task=form.save(commit=False),
+            previous_due=due,
+            previous_reminder=reminder,
+            previous_assignee_id=assignee_id,
+            actor=self.request.user,
+            request=self.request,
+        )
+        messages.success(self.request, "Follow-up updated.")
+        fallback = reverse("crm:lead_detail", args=[self.object.lead_id])
+        return redirect(_safe_next(self.request, fallback))
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        ctx["next"] = self.request.GET.get("next", "")
+        return ctx
 
 
 class FollowUpCompleteView(SalesRequiredMixin, View):
