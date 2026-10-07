@@ -141,10 +141,11 @@ from the booking page — reissuing kills the old link.
 
 ### 3. Humans take over when it matters
 
-Asking for a person — or Claude deciding the chat needs one — moves the
-conversation to **Waiting** and notifies the team. From the inbox an agent can
-**Take over** (the AI stops replying), answer directly, then **Hand back to
-AI**. Every switch is recorded as a `ConversationHandoff`. The widget polls for
+Asking for a person — or the AI model deciding the chat needs one — moves the
+conversation to **Waiting** and notifies the chat's assignee, or every manager if
+it has none. An agent opens the chat from the inbox and can **Take over** (the
+AI stops replying), answer directly (**Send reply** also takes over), then
+**Hand back to AI**. Every switch is recorded as a `ConversationHandoff`. The widget polls for
 agent replies, so the customer sees them without a page reload. While a chat is
 waiting for a person the AI stays quiet and tells the customer a consultant is
 coming. Managers assign or reassign chats from the inbox or the conversation
@@ -170,23 +171,24 @@ assignee, team, website and source filters as the list, and a column's
 "+N more" opens the filtered list. Every status change, assignment and note is
 written to an activity timeline.
 
-Each lead carries a 0–100 **score** — points for reachable contact details,
-known dates, a stated budget and pipeline position — so the pipeline sorts
-itself. Follow-up tasks bucket into overdue / today / upcoming. When a task's
+Each lead carries a 0–100 **score** — a rule-based heuristic, not AI: points
+for reachable contact details, a destination, known dates, a stated budget, a
+party of more than one and pipeline position (`crm/services.py:score_lead`). Follow-up tasks bucket into overdue / today / upcoming. When a task's
 reminder time (or, without one, its due time) passes, the scheduler reminds the
 assignee — or the lead's owner, or the managers if nobody owns it — once, in
 the app and by email.
 
-Employees only see leads assigned to them, to a team they belong to, or
-unassigned; managers and admins see everything. Assigning a lead to a team
-notifies its members. Follow-ups can be edited; moving the reminder later
+Employees only see leads assigned to them, to a team they belong to (with or
+without a named owner), or to nobody at all; managers and admins see
+everything. Assigning a lead to a team notifies its members. Follow-ups can be edited; moving the reminder later
 sends it again. Managers can archive a customer (hidden from lists and
 pickers, history kept) and restore them.
 
 ### 5. Inventory decides what can be sold
 
 Hotels (with room offers), car rentals and tour packages, all hung off a shared
-`Destination` list. One search — [`inventory/selectors.py:search_inventory`](inventory/selectors.py) —
+`Destination` list. Room offers are kept for staff reference; search, the AI's
+quotes and chat-booking prices use the hotel's base (per-night) price. One search — [`inventory/selectors.py:search_inventory`](inventory/selectors.py) —
 serves the dashboard search page, the public API and the AI engine, so the chat
 can never recommend something the search page wouldn't show.
 
@@ -204,14 +206,24 @@ A verified payment confirms the booking and moves the lead to **Converted**.
 
 Webhooks are verified against the raw request body. `payment.captured` and
 `order.paid` confirm the booking only when the captured amount and currency match
-the order; `payment.failed` never downgrades a confirmed booking; `refund.processed`
-marks the booking **Refunded**. Each `X-Razorpay-Event-Id` is applied once, so
-Razorpay's retries cannot double-apply an event.
+the order; `payment.failed` marks a pending booking **Failed** (the customer can retry on
+the same link) and never downgrades a confirmed one; `refund.processed` for a
+full refund marks the booking **Refunded** and the lead **Lost**, while a
+partial refund leaves the booking confirmed and alerts managers. Each
+`X-Razorpay-Event-Id` is applied once, so Razorpay's retries cannot
+double-apply an event.
+
+**Refunds and cancellations.** There is no refund button: refunds are issued in
+the Razorpay dashboard and arrive here by webhook. Managers can cancel a booking
+that is not yet confirmed (**Cancel booking**), which closes its open orders,
+moves a Payment Pending lead back to Interested and emails the customer.
 
 **Without Razorpay keys** the gateway runs in simulation mode: orders are minted
-locally with the same shape and the same signature scheme, and a *"Complete
-simulated payment"* button on the booking page exercises the real verification
-path. Configure keys and the same code goes live.
+locally with the same shape and the same signature scheme. After **Create
+payment order**, managers get a *"Complete simulated payment"* button on the
+booking page, and the customer pay page shows *"Simulate payment (test mode)"*;
+both exercise the real verification path. Configure both keys and the same code
+goes live, and the simulation buttons disappear.
 
 **Customer emails.** When a booking is raised — by the customer in the chat or
 by staff — the customer gets *"Your booking … — complete your payment"* with
@@ -250,15 +262,19 @@ unanswered message — to that person's first reply.
 
 ## Roles
 
-| Role | Can do |
-|---|---|
-| **Admin** | Everything, plus users, teams and the audit log |
-| **Manager** | Everything operational: all leads, reports, analytics, refunds, cancellations |
-| **Employee** | Own and unassigned leads, chats, bookings, customers |
-| **Inventory** | Inventory and visibility; not the CRM pipeline |
+| Role | Can do | Cannot do |
+|---|---|---|
+| **Admin** | Everything a manager can, plus **Users & Roles** (users, teams, audit log) and **AI Settings** | — |
+| **Manager** | All leads, customers, chats and bookings; assign chats; cancel bookings; complete simulated payments; archive/restore customers; websites and widget keys; inventory; **Knowledge Base**; **Reports**, **Analytics** and CSV exports | Users, teams, audit log, AI Settings. Refunds are not done in the app (Razorpay dashboard, then webhook) |
+| **Employee** | Leads assigned to them, to their teams, or to nobody; their own and unassigned chats (take over, reply, hand back, book for the customer); bookings they raised or whose lead they can see; matching customers and follow-ups; view websites and inventory | Assign chats, cancel bookings, simulated payments, archive customers, edit websites or inventory, reports/analytics/exports, Knowledge Base |
+| **Inventory** | Hotels, room offers, cars, packages, destinations, visibility rules; view websites | CRM, conversations, bookings, reports |
 
-Sensitive actions (user changes, key issuance, status changes, payments) are
-written to the audit log with actor and IP.
+Every role sees the dashboard overview (its headline figures are business-wide)
+and its own notifications. Other employees' records are a 404, in the dashboard
+and the API alike. Superusers pass every role check and get the manager
+alerts; give them the Admin role too so the users list reads correctly. Sensitive actions (user changes, key
+issuance, status changes, payments) are written to the audit log with actor
+and IP.
 
 ---
 
@@ -287,28 +303,33 @@ All responses share an envelope: `{"success": bool, "message": str, "data": ...}
 list endpoints put `results`, `count`, `page` inside `data`. Errors return
 `{"success": false, "error": {...}}`.
 
-Session-authenticated unless noted.
+Session-authenticated unless noted; the role needed is in brackets
+(*sales* = admin, manager or employee; employees only get their own records).
 
 ```
-GET  /api/v1/health/                          public
-GET  /api/v1/users/ · /teams/
-GET  /api/v1/websites/ · /websites/{id}/
-GET  /api/v1/inventory/{destinations,hotels,cars,packages,visibility}/
-GET  /api/v1/inventory/search/?destination=&inventory_type=&max_price=&website=
-GET  /api/v1/crm/{customers,leads,follow-ups}/ · /crm/leads/pipeline/
-GET  /api/v1/conversations/inbox/ · /{id}/
-POST /api/v1/conversations/{id}/handoff/       {"action": "take_over|resume_ai|close"}
-POST /api/v1/conversations/widget/chat/        public — widget key
-GET  /api/v1/conversations/widget/history/     public — key + session; ?since=<id> to poll
-POST /api/v1/conversations/widget/book/        public — "Book this" on a card
-POST /api/v1/crm/intake/                       public — website enquiry form, widget key
-POST /api/v1/pay/{token}/order/ · verify/ · simulate/   public — payment link token
-GET  /api/v1/bookings/ · /bookings/{id}/
-POST /api/v1/bookings/payments/create/         {"booking_id": 1}
-POST /api/v1/bookings/payments/verify/         Razorpay checkout response
-POST /api/v1/bookings/payments/webhook/        public — HMAC verified
-GET  /api/v1/dashboard/{overview,notifications,reports,analytics}/
-POST /api/v1/dashboard/notifications/          mark read
+GET  /api/v1/health/                                   public
+GET  /api/v1/users/ · /users/{id}/                     [admin]
+GET  /api/v1/teams/                                    [any signed-in user]
+GET  /api/v1/websites/ · /websites/{id}/               [manager]
+GET  /api/v1/inventory/{destinations,hotels,cars,packages,visibility}/   [any signed-in user]
+GET  /api/v1/inventory/search/?q=&destination=&inventory_type=&min_price=&max_price=&website=&limit=
+GET  /api/v1/crm/customers/ · /customers/{id}/         [sales]
+GET  /api/v1/crm/leads/ · /leads/{id}/ · /leads/pipeline/   [sales] — leads takes the leads-page filters
+GET  /api/v1/crm/follow-ups/?bucket=overdue|today|upcoming|completed   [sales]
+GET  /api/v1/conversations/inbox/ · /{id}/             [sales] — inbox excludes closed chats
+POST /api/v1/conversations/{id}/handoff/               [sales] {"action": "take_over|resume_ai|close"}
+POST /api/v1/conversations/widget/chat/                public — widget key
+GET  /api/v1/conversations/widget/history/             public — key + session; ?since=<id> to poll
+POST /api/v1/conversations/widget/book/                public — "Book this" on a card
+POST /api/v1/crm/intake/                               public — website enquiry form, widget key
+POST /api/v1/pay/{token}/order/ · verify/ · simulate/  public — payment link token
+GET  /api/v1/bookings/ · /bookings/{id}/               [sales]
+POST /api/v1/bookings/payments/create/                 [sales] {"booking_id": 1}
+POST /api/v1/bookings/payments/verify/                 [sales] Razorpay checkout response
+POST /api/v1/bookings/payments/webhook/                public — HMAC verified
+GET  /api/v1/dashboard/overview/ · /notifications/     [any signed-in user]
+POST /api/v1/dashboard/notifications/                  mark read: {"id": n}, or all without id
+GET  /api/v1/dashboard/reports/ · /analytics/          [manager] — website, days, date_from, date_to
 ```
 
 ---
@@ -319,21 +340,29 @@ All settings come from `.env` (see `.env.example`).
 
 | Variable | Effect when unset |
 |---|---|
+| `DEBUG` | Off. With it off, `SECRET_KEY` must be set or the app refuses to start |
+| `SECRET_KEY` | Required in production; a dev-only key is used only when `DEBUG=True` |
+| `ALLOWED_HOSTS` | `localhost,127.0.0.1,testserver` — hostnames only |
+| `CSRF_TRUSTED_ORIGINS` | Empty; list every `https://host` the dashboard is served from or form POSTs fail |
+| `USE_X_FORWARDED_PROTO` | Off. Set `True` behind TLS-terminating nginx (also makes session/CSRF cookies Secure) |
+| `TIME_ZONE` | `Asia/Kolkata` — drives "today", report dates and the backup hour |
 | `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` | Fallback when no key is saved under AI Settings; with neither, chat runs on the rule-based engine |
 | `AI_MODEL` | Claude model used until an admin saves AI Settings; defaults to `claude-opus-5-5` |
 | `AI_ENABLED` | Set `false` to force the rule engine even with a key |
-| `RAZORPAY_KEY_ID` / `_SECRET` | Payments run in simulation mode |
+| `AI_MAX_HISTORY` / `AI_TIMEOUT_SECONDS` | 20 previous messages sent to the model; 30 s timeout |
+| `RAZORPAY_KEY_ID` / `_SECRET` | Payments run in simulation mode. Live mode needs both (and the `razorpay` package, which is in `requirements.txt`); with only `RAZORPAY_KEY_ID` set, checkout signatures are refused and nothing can be paid |
 | `RAZORPAY_WEBHOOK_SECRET` | Simulation mode: webhooks verified against the simulation secret. With live keys: every webhook is rejected |
 | `BOOKING_TAX_PERCENT` | Defaults to 5 |
 | `PAYMENT_LINK_TTL_DAYS` | Customer payment links last 7 days |
 | `THROTTLE_WIDGET_CHAT` / `_POLL` / `_BOOK`, `THROTTLE_PUBLIC_PAY`, `THROTTLE_PUBLIC_INTAKE` | Per-IP limits: `30/minute`, `120/minute`, `20/hour`, `60/hour`, `20/hour` |
 | `NUM_PROXIES` | `1` (nginx in front). Set `0` when nothing sits in front of gunicorn, or clients could dodge rate limits with a forged `X-Forwarded-For` |
-| `DATABASE_URL` | SQLite; set a `postgres://` URL for Postgres |
+| `DATABASE_URL` | SQLite; set a `postgres://` URL for Postgres (the nightly backup only covers SQLite) |
 | `SITE_URL` | Base of links in emails; defaults to `http://localhost:8000` — set it in production |
 | `EMAIL_HOST` (+ `EMAIL_PORT`, `EMAIL_HOST_USER`, `EMAIL_HOST_PASSWORD`, `EMAIL_USE_TLS` / `EMAIL_USE_SSL`, `EMAIL_TIMEOUT`) | Emails are printed to the log (console backend) instead of sent. `EMAIL_BACKEND` overrides the choice |
 | `DEFAULT_FROM_EMAIL` / `SERVER_EMAIL` | `Scared Travel <no-reply@localhost>` |
 | `BACKUP_HOUR` / `BACKUP_KEEP_DAYS` / `BACKUP_ENABLED` / `BACKUP_DIR` | Nightly backup after 03:00, newest 14 kept, on, `backups/` beside the database |
 | `LOG_LEVEL` | `INFO` |
+| `DOMAIN`, `CERTBOT_EMAIL`, `CERTBOT_STAGING`, `SEED_DEMO`, `COMPOSE_FILE` | Docker only — see [DEPLOY.md](DEPLOY.md) |
 
 Before deploying: set `DEBUG=False`, a real `SECRET_KEY` and `ALLOWED_HOSTS`,
 run `collectstatic`, and serve through `gunicorn config.wsgi`.
@@ -372,9 +401,31 @@ Full VPS walkthrough — DNS, firewall, CD secrets, backups, troubleshooting —
 python manage.py test
 ```
 
-340+ tests covering requirement extraction, the Claude layer and each of its
-fallbacks (stubbed — no network), lead capture and deduplication, handoff,
-pipeline transitions, scoring, role-based visibility, inventory search and
-visibility rules, payment signature verification, webhook idempotency, the
-API envelope, customer and staff emails (locmem backend), password reset,
-follow-up reminders, the scheduler and the nightly backup.
+467 tests (43 of them end-to-end journeys) covering requirement extraction, the Claude and Gemini
+layers and each of their fallbacks (stubbed — no network), lead capture and
+deduplication, handoff and AI auto-resume, pipeline transitions, scoring,
+role-based and record-level visibility, inventory search and visibility rules,
+payment signature verification, webhook idempotency and amount checks, the API
+envelope, CORS and throttling, customer and staff emails (locmem backend),
+password reset, follow-up reminders, the scheduler and the nightly backup.
+
+End-to-end journeys — widget chat to paid booking, enquiry form to follow-up
+reminder, human handoff, payment webhook scenarios, AI providers and a security
+sweep — live in [`e2e/`](e2e/) and run with the same command.
+
+Cross-browser smoke tests (Playwright: Chromium, Firefox and WebKit, desktop and
+mobile) live in [`browser_tests/`](browser_tests/) and run with
+`browser_tests/run.sh`, which needs Docker. See
+[browser_tests/README.md](browser_tests/README.md).
+
+---
+
+## Documentation
+
+| Document | For |
+|---|---|
+| [docs/USER_GUIDE.md](docs/USER_GUIDE.md) | Staff guide by role: every page, button and metric |
+| [docs/UAT_CHECKLIST.md](docs/UAT_CHECKLIST.md) | Client acceptance testing on staging, with sign-off |
+| [docs/FIP_TRACEABILITY.md](docs/FIP_TRACEABILITY.md) | Each FIP feature → where it is implemented and which tests cover it |
+| [DEPLOY.md](DEPLOY.md) | VPS deployment, CI/CD, backups, troubleshooting and the go-live checklist |
+| [browser_tests/README.md](browser_tests/README.md) | Running the cross-browser suite |

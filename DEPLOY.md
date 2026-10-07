@@ -270,6 +270,144 @@ The troubleshooting table at the end of this file covers the usual causes.
 
 ---
 
+## 9. Go-live checklist
+
+Work through this once before real customers use the system, after sections
+1–8. Every change to `.env` only takes effect when the containers are
+recreated — `docker compose up -d --force-recreate` (both `web` and
+`scheduler` read `.env`). Tick each line.
+
+### Server and Django
+
+- [ ] **`DEBUG=False`**, a fresh **`SECRET_KEY`** (50+ random characters) and
+      **`ALLOWED_HOSTS`** listing the domain, `www.` and (optionally) the IP —
+      see [§4](#4-write-the-env). `./docker/verify.sh` fails if `DEBUG` is on or
+      the key is the placeholder.
+- [ ] **`DATABASE_URL=sqlite:///data/db.sqlite3`** (on the volume), or a
+      `postgres://` URL.
+- [ ] **`SEED_DEMO=false`**, and `seed_demo` has **never** been run on this
+      database. It creates `admin`, `manager`, `agent1`, `agent2` and `stock`
+      with the password `travel1234` plus fake leads and bookings. If it was run,
+      start from an empty database or deactivate those accounts and delete the
+      demo data. (The sign-in page shows a *Demo login* hint for
+      `admin` / `travel1234` only while `DEBUG=True`.)
+
+### HTTPS
+
+The certificate is issued in [§5](#5-build-and-issue-the-certificate). If the
+box was first brought up over plain HTTP (the `COMPOSE_FILE` /
+`USE_X_FORWARDED_PROTO=False` note at the end of [§4](#4-write-the-env)):
+
+- [ ] Remove the `COMPOSE_FILE=docker-compose.yml:docker-compose.http-only.yml`
+      line from `.env`.
+- [ ] Set **`USE_X_FORWARDED_PROTO=True`** (also makes the session and CSRF
+      cookies HTTPS-only).
+- [ ] **`CSRF_TRUSTED_ORIGINS`** contains `https://<domain>` and
+      `https://www.<domain>`.
+- [ ] **`SITE_URL=https://<domain>`** — no trailing slash. Every emailed link
+      (payment links, password resets, alert emails) is built from it; leaving
+      the IP or `http://` here sends customers to the wrong address.
+- [ ] `docker compose up -d --force-recreate`, then `http://<domain>/`
+      redirects to `https://<domain>/` with a trusted padlock.
+
+### Email (SMTP)
+
+- [ ] `EMAIL_HOST`, `EMAIL_PORT`, `EMAIL_HOST_USER`, `EMAIL_HOST_PASSWORD`,
+      `EMAIL_USE_TLS` (587) or `EMAIL_USE_SSL` (465), and
+      **`DEFAULT_FROM_EMAIL`** / `SERVER_EMAIL` set as described in the *Email*
+      note in [§4](#4-write-the-env); the sending domain has the provider's
+      SPF/DKIM records.
+- [ ] `docker compose exec web python manage.py sendtestemail you@example.com`
+      arrives (not in spam).
+- [ ] End-to-end test: sign out, **Forgot password?**, enter a staff address →
+      the *Reset your … password* email arrives and its link starts with
+      `https://<domain>/`.
+
+### Admin account
+
+`createsuperuser` ([§7](#7-create-your-admin-user)) creates a superuser whose
+role is still *Employee*. Pages and manager alerts (new leads, chats waiting
+for a human, payments) are open to it anyway, but give it the Admin role so the
+users list and reports read correctly.
+
+- [ ] Sign in, open **Users & Roles → Edit** on your account: **Role** =
+      *Admin*, a real **Email address**, **Email notifications** ticked → **Save
+      user**.
+- [ ] Create the real staff accounts with the right roles and email addresses,
+      and their teams.
+
+### Razorpay (live payments)
+
+- [ ] **`RAZORPAY_KEY_ID`** and **`RAZORPAY_KEY_SECRET`** set to the **live**
+      keys from the Razorpay Dashboard. Both are needed; with only the key id
+      set, every payment is refused.
+- [ ] **`RAZORPAY_WEBHOOK_SECRET`** set. With live keys and no webhook secret,
+      every webhook is rejected and bookings paid after the customer closes the
+      checkout never confirm.
+- [ ] In the Razorpay Dashboard's webhook settings, add a webhook:
+  - URL: `https://<domain>/api/v1/bookings/payments/webhook/`
+  - Secret: the same value as `RAZORPAY_WEBHOOK_SECRET`
+  - Active events: **`payment.captured`**, **`order.paid`**,
+    **`payment.failed`**, **`refund.processed`** — the only four the app acts
+    on (`bookings/services.py:handle_webhook`); others are acknowledged and
+    ignored.
+- [ ] `docker compose up -d --force-recreate`, then **Bookings → Payments**
+      shows **Gateway: Live**. The simulation buttons (**Complete simulated
+      payment** on the booking page, **Simulate payment (test mode)** on the
+      customer pay page) are gone.
+- [ ] Live test: create a booking by hand for yourself with a small subtotal,
+      pay it from the payment link → the booking becomes **Confirmed** and the
+      confirmation email arrives. Then refund it **in the Razorpay Dashboard**
+      (the app has no refund button) → within a minute the booking shows
+      **Refunded**. In the Dashboard's webhook log the deliveries show 200.
+
+### AI provider
+
+- [ ] As an admin, **AI Settings**: tick **Let AI write chat replies**, choose
+      the **Provider** and **Model**, paste the API key → **Save settings**.
+      (Alternatively set `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` in `.env`; a key
+      saved on the page wins.)
+- [ ] **Test connection** reports *Connected — … is available.*
+- [ ] Set the auto-resume timers you want (handoff wait default 15 minutes,
+      agent idle default off).
+- [ ] **Knowledge Base**: at least the cancellation, refund and payment
+      policies are written and active — without them the AI declines those
+      questions.
+
+### Websites and the widget
+
+For each real customer-facing site:
+
+- [ ] **Websites → Add website** with the real **Domain** (bare hostname, no
+      `https://`; `www.` and subdomains are covered) and **Source identifier**.
+      The widget and enquiry form only answer pages served from that domain.
+- [ ] Copy the **Embed the chat widget** snippet (and, if wanted, the **Website
+      enquiry form** snippet) from the website page **while browsing the
+      dashboard at `https://<domain>`** — the snippet's URLs are taken from the
+      address you are using. It should match [The widget embed](#the-widget-embed).
+- [ ] On the live site: the bubble appears, a test message gets a reply, and
+      the lead appears under **CRM → Leads** tagged with that website. Then
+      revoke or archive any test websites and keys.
+
+### Health, verification and backups
+
+- [ ] `curl -s https://<domain>/api/v1/health/` returns `"status": "ok"` and
+      `"database": "ok"`.
+- [ ] `./docker/verify.sh` ends with *Everything checks out.* (see
+      [§8](#8-check-everything-works)); work through *Then check it by hand*.
+- [ ] `docker compose ps` shows **scheduler** running (reminders, chat
+      auto-resume and backups depend on it).
+- [ ] Backups (see [Backups](#backups)): take one now with the `force=True`
+      command, and after the first night confirm a dated file exists:
+      `docker compose exec web ls -lh /app/data/backups` and
+      `docker compose logs scheduler | grep -i backed`. Backups cover SQLite
+      only; with Postgres use the provider's backups.
+- [ ] Set up the off-server copy (`rsync`/`rclone`) and rehearse [*Restore a
+      backup*](#backups) once on a staging box.
+- [ ] Client UAT signed off: [docs/UAT_CHECKLIST.md](docs/UAT_CHECKLIST.md).
+
+---
+
 ## Continuous deployment
 
 [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml) runs the test
