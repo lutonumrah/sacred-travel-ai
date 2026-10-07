@@ -11,7 +11,7 @@
   {% elif booking.status == 'failed' %}
     <div class="public-banner warn">
       <strong>The last payment attempt did not go through.</strong>
-      <span>No money was taken for it. You can try again below.</span>
+      <span>No money was taken for it. You can try again below{% if is_live_gateway %} — with the same or a different card, UPI or bank{% endif %}.</span>
     </div>
   {% endif %}
 
@@ -108,7 +108,13 @@
             }, function (error) { fail(pay, error); });
           };
           options.modal = { ondismiss: function () { pay.disabled = false; } };
-          new Razorpay(options).open();
+          var checkout = new Razorpay(options);
+          // A declined attempt: say so and let the customer try again.
+          checkout.on("payment.failed", function (response) {
+            var reason = (response && response.error && response.error.description) || "";
+            fail(pay, new Error("The payment did not go through" + (reason ? ": " + reason : "") + ". No money was taken — please try again."));
+          });
+          checkout.open();
         }, function (error) { fail(pay, error); });
       });
     }

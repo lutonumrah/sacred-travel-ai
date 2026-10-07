@@ -2,16 +2,21 @@
 
 {% block page_actions %}
   <a class="btn ghost" href="{% url 'bookings:list' %}">All bookings</a>
-  {% if booking.status == 'pending' or booking.status == 'draft' %}
-    {% if not pending_payment %}
-      <form method="post" action="{% url 'bookings:payment_create' booking.pk %}" class="inline-form">
-        {% csrf_token %}<button class="btn" type="submit">Create payment order</button>
-      </form>
-    {% endif %}
+  {% if booking.is_payable and not pending_payment %}
+    <form method="post" action="{% url 'bookings:payment_create' booking.pk %}" class="inline-form">
+      {% csrf_token %}<button class="btn" type="submit">{% if booking.status == 'failed' %}Retry payment (new order){% else %}Create payment order{% endif %}</button>
+    </form>
   {% endif %}
 {% endblock %}
 
 {% block content %}
+  {% if booking.status == 'failed' %}
+    <ul class="messages"><li class="warning">
+      The last payment attempt failed{% if failed_payment.failure_reason %} ({{ failed_payment.failure_reason }}){% endif %}.
+      The customer can retry from their payment link{% if not payment_link %} once you issue a new one{% endif %}, or use
+      <strong>Retry payment</strong> to open a new order here.
+    </li></ul>
+  {% endif %}
   <div class="split">
     <div>
       <div class="panel">

@@ -1288,3 +1288,90 @@ class StaffOfferBookingTests(OfferFixture):
         self.assertEqual(Booking.objects.count(), 0)
 
 
+class PaymentRetryTests(PaymentLinkFixture):
+    def fail_the_order(self):
+        payment = services.open_checkout(booking=self.booking)
+        services.mark_payment_failed(payment=payment, reason="Card declined")
+        self.booking.refresh_from_db()
+        self.assertEqual(self.booking.status, BookingStatus.FAILED)
+        return payment
+
+    def test_the_customer_can_retry_on_the_pay_page_after_a_failure(self):
+        failed = self.fail_the_order()
+        page = self.client.get(reverse("public:pay", args=[self.token]))
+        self.assertContains(page, "did not go through")
+        self.assertContains(page, "Simulate payment (test mode)")
+
+        body = self.api("order").json()
+        self.assertTrue(body["success"])
+        self.assertNotEqual(body["data"]["order_id"], failed.razorpay_order_id)
+        self.booking.refresh_from_db()
+        self.assertEqual(self.booking.status, BookingStatus.PENDING)
+
+        self.assertTrue(self.api("simulate").json()["success"])
+        self.booking.refresh_from_db()
+        self.assertEqual(self.booking.status, BookingStatus.CONFIRMED)
+        self.assertEqual(
+            sorted(self.booking.payments.values_list("status", flat=True)),
+            [PaymentStatus.FAILED, PaymentStatus.SUCCESS],
+        )
+
+    def test_staff_can_retry_with_a_new_order_from_the_booking_page(self):
+        failed = self.fail_the_order()
+        self.client.force_login(self.agent)
+        url = reverse("bookings:detail", args=[self.booking.pk])
+        page = self.client.get(url)
+        self.assertContains(page, "Retry payment (new order)")
+        self.assertContains(page, "Card declined")
+        self.client.post(reverse("bookings:payment_create", args=[self.booking.pk]))
+        self.booking.refresh_from_db()
+        self.assertEqual(self.booking.status, BookingStatus.PENDING)
+        latest = self.booking.payments.order_by("-pk").first()
+        self.assertNotEqual(latest.pk, failed.pk)
+        self.assertEqual(latest.status, PaymentStatus.CREATED)
+        self.assertTrue(AuditLog.objects.filter(action="booking.payment_retry").exists())
+
+    def test_staff_can_reissue_an_expired_link_for_a_failed_booking(self):
+        self.fail_the_order()
+        Booking.objects.filter(pk=self.booking.pk).update(
+            payment_token_expires_at=timezone.now() - timedelta(minutes=1)
+        )
+        self.assertEqual(self.client.get(reverse("public:pay", args=[self.token])).status_code, 404)
+        self.client.force_login(self.agent)
+        self.client.post(reverse("bookings:payment_link", args=[self.booking.pk]))
+        self.booking.refresh_from_db()
+        page = self.client.get(reverse("public:pay", args=[self.booking.payment_token]))
+        self.assertContains(page, "did not go through")
+
+    def test_a_confirmed_booking_cannot_open_another_order(self):
+        services.simulate_checkout(booking=self.booking)
+        self.client.force_login(self.manager)
+        self.client.post(reverse("bookings:payment_create", args=[self.booking.pk]))
+        self.assertEqual(self.booking.payments.count(), 1)
+        response = self.client.post(
+            reverse("api_bookings:payment_create"), {"booking_id": self.booking.pk},
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 409)
+
+
+class BookingStatusChoiceTests(BookingFixture):
+    def test_draft_and_paid_are_gone_and_old_rows_are_mapped(self):
+        import importlib
+
+        from django.apps import apps
+
+        self.assertEqual(
+            {value for value, _ in BookingStatus.choices},
+            {"pending", "confirmed", "cancelled", "failed", "refunded"},
+        )
+        draft, paid = self.make_booking(), self.make_booking()
+        Booking.objects.filter(pk=draft.pk).update(status="draft")
+        Booking.objects.filter(pk=paid.pk).update(status="paid")
+        migration = importlib.import_module("bookings.migrations.0005_drop_draft_and_paid_statuses")
+        migration.forwards(apps, None)
+        draft.refresh_from_db()
+        paid.refresh_from_db()
+        self.assertEqual((draft.status, paid.status), ("pending", "confirmed"))
+
+

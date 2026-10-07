@@ -99,6 +99,7 @@ class BookingDetailView(SalesRequiredMixin, DetailView):
         ctx["attribution_rows"] = attribution_rows(booking)
         pending = booking.payments.filter(status__in=["created", "pending"]).first()
         ctx["pending_payment"] = pending
+        ctx["failed_payment"] = services.last_failed_payment(booking)
         ctx["is_live_gateway"] = payments.is_live()
         ctx["razorpay_key"] = payments.key_id()
         ctx["payment_link"] = (
@@ -126,10 +127,22 @@ class BookingDetailView(SalesRequiredMixin, DetailView):
 class PaymentOrderCreateView(SalesRequiredMixin, View):
     def post(self, request, pk):
         booking = get_object_or_404(selectors.visible_bookings(request.user), pk=pk)
-        payment = services.create_payment_order(
-            booking=booking, actor=request.user, request=request
-        )
+        retry = booking.status == BookingStatus.FAILED
+        try:
+            payment = services.open_payment_order(
+                booking=booking, actor=request.user, request=request
+            )
+        except services.BookingError as exc:
+            messages.error(request, str(exc))
+            return redirect("bookings:detail", pk=pk)
         mode = "live" if payments.is_live() else "simulation"
+        if retry:
+            messages.success(
+                request,
+                f"New payment order {payment.razorpay_order_id} created ({mode} mode) — "
+                "the booking is back to Pending Payment.",
+            )
+            return redirect("bookings:detail", pk=pk)
         messages.success(
             request,
             f"Payment order {payment.razorpay_order_id} created ({mode} mode).",

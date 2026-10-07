@@ -445,7 +445,7 @@ def cancel_booking(*, booking, actor=None, request=None, reason=""):
     if (
         lead is not None
         and lead.status == LeadStatus.PAYMENT_PENDING
-        and not _lead_has_other_bookings(booking, [BookingStatus.PENDING, BookingStatus.DRAFT])
+        and not _lead_has_other_bookings(booking, [BookingStatus.PENDING, BookingStatus.FAILED])
     ):
         crm_services.change_status(
             lead=lead, status=LeadStatus.INTERESTED, actor=actor, request=request
@@ -537,7 +537,7 @@ def record_refund(*, payment, refund=None, payment_entity=None, actor=None, requ
     if (
         lead is not None
         and lead.status in (LeadStatus.CONVERTED, LeadStatus.PAYMENT_PENDING)
-        and not _lead_has_other_bookings(booking, [BookingStatus.CONFIRMED, BookingStatus.PAID])
+        and not _lead_has_other_bookings(booking, [BookingStatus.CONFIRMED])
     ):
         crm_services.change_status(
             lead=lead,
@@ -801,13 +801,38 @@ def payment_url(booking, request=None):
     return request.build_absolute_uri(path) if request is not None else path
 
 
-def open_checkout(*, booking, request=None):
-    """Create (or reuse) the gateway order for a customer paying by link."""
+def open_payment_order(*, booking, actor=None, request=None):
+    """Create (or reuse) a gateway order for a booking that can still be paid.
+
+    After a failed payment this is the retry: the failed order stays on record,
+    a fresh order is opened and the booking goes back to Pending Payment.
+    """
     if not booking.is_payable:
         raise BookingError(
             f"This booking is {booking.get_status_display().lower()} and cannot be paid."
         )
-    return create_payment_order(booking=booking, request=request)
+    if booking.status == BookingStatus.FAILED:
+        booking.status = BookingStatus.PENDING
+        booking.save(update_fields=["status", "updated_at"])
+        log_audit(
+            actor=actor,
+            action="booking.payment_retry",
+            entity=booking,
+            metadata={"number": booking.booking_number},
+            request=request,
+        )
+    return create_payment_order(booking=booking, actor=actor, request=request)
+
+
+def open_checkout(*, booking, request=None):
+    """Create (or reuse) the gateway order for a customer paying by link."""
+    return open_payment_order(booking=booking, request=request)
+
+
+def last_failed_payment(booking):
+    """The most recent payment attempt, if it failed (so it can be retried)."""
+    latest = booking.payments.order_by("-created_at", "-pk").first()
+    return latest if latest is not None and latest.status == PaymentStatus.FAILED else None
 
 
 def simulate_checkout(*, booking, request=None):

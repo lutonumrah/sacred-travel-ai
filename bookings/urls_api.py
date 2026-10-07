@@ -54,9 +54,12 @@ class PaymentCreateAPI(APIView):
         booking = generics.get_object_or_404(
             selectors.visible_bookings(request.user), pk=serializer.validated_data["booking_id"]
         )
-        payment = services.create_payment_order(
-            booking=booking, actor=request.user, request=request
-        )
+        try:
+            payment = services.open_payment_order(
+                booking=booking, actor=request.user, request=request
+            )
+        except services.BookingError as exc:
+            return ErrorResponse(str(exc), status_code=409)
         return SuccessResponse(
             {
                 "payment": PaymentSerializer(payment).data,

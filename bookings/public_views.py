@@ -52,7 +52,7 @@ class PaymentPageView(View):
             {
                 "guest": guest,
                 "pricing": (booking.summary or {}).get("pricing", {}),
-                "is_paid": booking.status in (BookingStatus.CONFIRMED, BookingStatus.PAID),
+                "is_paid": booking.status == BookingStatus.CONFIRMED,
                 "is_payable": booking.is_payable,
                 "is_live_gateway": payments.is_live(),
                 "token": token,

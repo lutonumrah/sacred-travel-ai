@@ -8,9 +8,9 @@ from websites.models import Website
 
 
 class BookingStatus(models.TextChoices):
-    DRAFT = "draft", "Draft"
+    # Bookings are raised ready to pay and confirmed the moment money is
+    # captured, so there is no draft or separate "paid" step (see migration 0005).
     PENDING = "pending", "Pending Payment"
-    PAID = "paid", "Paid"
     CONFIRMED = "confirmed", "Confirmed"
     CANCELLED = "cancelled", "Cancelled"
     FAILED = "failed", "Failed"

@@ -50,7 +50,7 @@ QUALIFIED_STATUSES = (
     LeadStatus.PAYMENT_PENDING,
     LeadStatus.CONVERTED,
 )
-PAID_BOOKING_STATUSES = (BookingStatus.PAID, BookingStatus.CONFIRMED)
+PAID_BOOKING_STATUSES = (BookingStatus.CONFIRMED,)
 
 
 def overview_kpis(*, website=None, days=30, start=None, end=None):
