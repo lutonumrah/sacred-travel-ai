@@ -419,3 +419,104 @@ class LeadAPIFilterTests(LeadFixture):
         self.assertEqual(response.status_code, 400)
         self.assertFalse(response.json()["success"])
 
+
+
+# --------------------------------------------------------------------------
+# Batch 3: follow-up reminders
+# --------------------------------------------------------------------------
+
+from django.core import mail  # noqa: E402
+
+
+class FollowUpReminderTests(LeadFixture):
+    def setUp(self):
+        super().setUp()
+        self.agent.email = "agent@x.com"
+        self.agent.save()
+        self.manager.email = "mgr@x.com"
+        self.manager.save()
+        self.lead = self.make_lead()
+        self.now = timezone.now()
+        Notification.objects.all().delete()
+
+    def task(self, **kwargs):
+        defaults = {
+            "lead": self.lead,
+            "title": "Call back",
+            "due_at": self.now + timedelta(hours=2),
+            "reminder_at": self.now - timedelta(minutes=1),
+        }
+        defaults.update(kwargs)
+        return FollowUpTask.objects.create(**defaults)
+
+    def fire(self, now=None):
+        with self.captureOnCommitCallbacks(execute=True):
+            return services.send_due_reminders(now=now or self.now)
+
+    def reminders_for(self, user):
+        return Notification.objects.filter(
+            recipient=user, notification_type="follow_up", metadata__event="reminder"
+        )
+
+    def test_reminder_goes_to_the_assignee_in_app_and_by_email_once(self):
+        task = self.task(assigned_to=self.agent)
+
+        self.assertEqual(self.fire(), 1)
+        self.assertEqual(self.fire(), 0)
+        self.assertEqual(self.fire(self.now + timedelta(days=1)), 0)
+
+        task.refresh_from_db()
+        self.assertEqual(task.reminded_at, self.now)
+        note = self.reminders_for(self.agent).get()
+        self.assertEqual(note.title, "Reminder: Call back")
+        self.assertEqual(note.link, reverse("crm:lead_detail", args=[self.lead.pk]))
+        self.assertFalse(self.reminders_for(self.manager).exists())
+        self.assertEqual([m.to for m in mail.outbox], [["agent@x.com"]])
+        self.assertIn("Reminder: Call back", mail.outbox[0].subject)
+        self.assertTrue(
+            LeadActivity.objects.filter(lead=self.lead, activity_type="follow_up_reminder")
+        )
+
+    def test_not_due_yet_and_completed_tasks_are_left_alone(self):
+        self.task(assigned_to=self.agent, reminder_at=self.now + timedelta(minutes=5))
+        self.task(assigned_to=self.agent, is_completed=True)
+        self.assertEqual(self.fire(), 0)
+        self.assertEqual(self.fire(self.now + timedelta(minutes=6)), 1)
+
+    def test_without_a_reminder_time_it_fires_at_the_due_time_as_overdue(self):
+        self.task(assigned_to=self.agent, reminder_at=None, due_at=self.now + timedelta(hours=1))
+        self.assertEqual(self.fire(), 0)
+        self.assertEqual(self.fire(self.now + timedelta(hours=1)), 1)
+        self.assertEqual(self.reminders_for(self.agent).get().title, "Overdue: Call back")
+
+    def test_unassigned_task_goes_to_the_lead_owner(self):
+        self.lead.assigned_to = self.other
+        self.lead.save()
+        self.task()
+        self.fire()
+        self.assertTrue(self.reminders_for(self.other).exists())
+        self.assertFalse(self.reminders_for(self.manager).exists())
+
+    def test_with_nobody_responsible_managers_are_reminded(self):
+        self.task()
+        self.fire()
+        self.assertTrue(self.reminders_for(self.manager).exists())
+        self.assertEqual([m.to for m in mail.outbox], [["mgr@x.com"]])
+
+    def test_an_inactive_assignee_falls_through_to_the_lead_owner(self):
+        self.agent.is_active = False
+        self.agent.save()
+        self.lead.assigned_to = self.other
+        self.lead.save()
+        self.task(assigned_to=self.agent)
+        self.fire()
+        self.assertFalse(self.reminders_for(self.agent).exists())
+        self.assertTrue(self.reminders_for(self.other).exists())
+
+    def test_opted_out_assignee_still_gets_the_in_app_reminder(self):
+        self.agent.email_notifications = False
+        self.agent.save()
+        self.task(assigned_to=self.agent)
+        self.fire()
+        self.assertTrue(self.reminders_for(self.agent).exists())
+        self.assertEqual(mail.outbox, [])

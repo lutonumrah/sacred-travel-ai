@@ -1,11 +1,12 @@
 from django.db import transaction
+from django.db.models import Q
 from django.urls import reverse
 from django.utils import timezone
 
-from core.notifications import notify, notify_managers
+from core.notifications import notify, notify_managers, notify_many
 from core.services import log_audit
 
-from .models import Customer, Lead, LeadActivity, LeadNote, LeadStatus
+from .models import Customer, FollowUpTask, Lead, LeadActivity, LeadNote, LeadStatus
 
 # Statuses that mean the lead is no longer being actively worked.
 CLOSED_STATUSES = {LeadStatus.CONVERTED, LeadStatus.LOST}
@@ -177,6 +178,8 @@ def change_status(*, lead, status, actor=None, request=None, lost_reason="", not
             title=f"{lead.title} moved to {LeadStatus(status).label}",
             link=link,
             metadata={"lead_id": lead.pk},
+            # Routine pipeline moves (many automatic) stay in-app.
+            email=False,
         )
     return lead
 
@@ -299,6 +302,74 @@ def complete_follow_up(*, task, actor=None, request=None):
     )
     log_audit(actor=actor, action="follow_up.complete", entity=task, request=request)
     return task
+
+
+def _reminder_recipients(task):
+    """The task's assignee, else the lead's owner, else nobody (managers)."""
+    for user in (task.assigned_to, task.lead.assigned_to):
+        if user is not None and user.is_active and user.is_active_employee:
+            return [user]
+    return []
+
+
+def due_reminders(now=None):
+    """Open tasks whose reminder time (or due time, if none) has passed, not yet reminded."""
+    now = now or timezone.now()
+    return (
+        FollowUpTask.objects.filter(
+            is_completed=False, reminded_at__isnull=True, lead__is_deleted=False
+        )
+        .filter(Q(reminder_at__lte=now) | Q(reminder_at__isnull=True, due_at__lte=now))
+        .select_related("lead", "lead__assigned_to", "assigned_to")
+    )
+
+
+def send_due_reminders(*, now=None):
+    """Fire each due follow-up reminder once. For the scheduler; returns how many fired.
+
+    Goes to the task's assignee, else the lead's owner, else every manager, in
+    the app and by email for those who opted in. Each task is claimed with a
+    conditional update in its own short transaction, so a second scheduler (or
+    a crash halfway through) never reminds twice.
+    """
+    now = now or timezone.now()
+    fired = 0
+    for task in due_reminders(now):
+        with transaction.atomic():
+            claimed = FollowUpTask.objects.filter(pk=task.pk, reminded_at__isnull=True).update(
+                reminded_at=now
+            )
+            if not claimed:
+                continue
+            due = timezone.localtime(task.due_at)
+            overdue = task.due_at <= now
+            title = f"{'Overdue' if overdue else 'Reminder'}: {task.title}"
+            body = f"Due {due:%d %b %Y %H:%M} · Lead: {task.lead.title}"
+            if task.notes:
+                body += f"\n{task.notes[:300]}"
+            options = {
+                "notification_type": "follow_up",
+                "title": title,
+                "body": body,
+                "link": reverse("crm:lead_detail", args=[task.lead_id]),
+                "metadata": {"task_id": task.pk, "event": "reminder"},
+            }
+            recipients = _reminder_recipients(task)
+            if recipients:
+                notify_many(recipients=recipients, **options)
+            else:
+                notify_managers(**options)
+            record_activity(
+                lead=task.lead,
+                activity_type="follow_up_reminder",
+                summary=f"Reminder sent: {task.title}",
+                details={
+                    "task_id": task.pk,
+                    "to": [user.get_username() for user in recipients] or "managers",
+                },
+            )
+        fired += 1
+    return fired
 
 
 def get_or_create_customer(*, first_name, last_name="", email="", phone="", **extra):

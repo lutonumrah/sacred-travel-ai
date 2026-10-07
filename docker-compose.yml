@@ -17,6 +17,32 @@ services:
       retries: 5
       start_period: 40s
 
+  # Follow-up reminders, chat auto-resume and the nightly SQLite backup.
+  # Same image as web (deploy.sh builds it once for both); it never migrates —
+  # it starts only after web, which did, reports healthy.
+  scheduler:
+    image: scared-travel-ai:latest
+    pull_policy: never
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      SKIP_BOOT_TASKS: "1"
+    command: ["python", "manage.py", "run_scheduled_jobs", "--loop", "--interval", "60"]
+    volumes:
+      - sqlite_data:/app/data
+      - media_files:/app/media
+    depends_on:
+      web:
+        condition: service_healthy
+    stop_grace_period: 30s
+    healthcheck:
+      # The loop touches this file after every run.
+      test: ["CMD", "python", "-c", "import os,sys,time; sys.exit(time.time() - os.path.getmtime('/tmp/scheduler-heartbeat') > 300)"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 90s
+
   nginx:
     image: nginx:1.27-alpine
     restart: unless-stopped

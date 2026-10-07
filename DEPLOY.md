@@ -1,8 +1,9 @@
 # Deploying to a Hostinger VPS with Docker
 
-Three containers: **web** (gunicorn), **nginx** (TLS + static/media), **certbot**
-(Let's Encrypt renewal). SQLite lives on a named volume, so the database
-survives rebuilds.
+Four containers: **web** (gunicorn), **scheduler** (follow-up reminders, chat
+auto-resume, nightly database backup), **nginx** (TLS + static/media) and
+**certbot** (Let's Encrypt renewal). SQLite lives on a named volume, so the
+database survives rebuilds.
 
 ---
 
@@ -91,7 +92,38 @@ CERTBOT_EMAIL=you@example.com
 CERTBOT_STAGING=false
 
 SEED_DEMO=false
+
+# Links in emails (payment links, password reset). Switch to
+# https://umrahcompany.co.uk once the certificate is issued.
+SITE_URL=http://153.92.210.143
+
+# Outgoing mail. Leave EMAIL_HOST blank and every email is printed to
+# `docker compose logs web` / `logs scheduler` instead of sent.
+EMAIL_HOST=smtp.example.com
+EMAIL_PORT=587
+EMAIL_HOST_USER=bookings@umrahcompany.co.uk
+EMAIL_HOST_PASSWORD=<smtp password>
+EMAIL_USE_TLS=True
+DEFAULT_FROM_EMAIL=Scared Travel <bookings@umrahcompany.co.uk>
+SERVER_EMAIL=bookings@umrahcompany.co.uk
+
+# Nightly database snapshot (see "Backups" below)
+BACKUP_HOUR=3
+BACKUP_KEEP_DAYS=14
 ```
+
+> **Email.** Any SMTP provider works (Hostinger mail, Google Workspace,
+> Brevo, SES, Mailgun…). Port 587 uses STARTTLS (`EMAIL_USE_TLS=True`); for
+> port 465 set `EMAIL_USE_SSL=True` instead. `DEFAULT_FROM_EMAIL` must be an
+> address the provider lets you send from, and the domain needs the provider's
+> SPF/DKIM records or mail lands in spam. Customer emails show the website's
+> brand name in front of that address. A broken SMTP setup never blocks a
+> booking or payment — the failure is logged and shown as **Failed** under
+> *Customer emails* on the booking page. To test after changing it:
+>
+> ```bash
+> docker compose exec web python manage.py sendtestemail you@example.com
+> ```
 
 Generate a real secret key:
 
@@ -380,11 +412,21 @@ docker compose restart web
 
 ```bash
 docker compose logs -f web          # application logs
+docker compose logs -f scheduler    # reminders, chat auto-resume, backups
 docker compose logs -f nginx        # access + TLS logs
 docker compose restart web          # restart the app
 docker compose down                 # stop (volumes survive)
 docker compose exec web python manage.py shell
+docker compose exec scheduler python manage.py run_scheduled_jobs   # run the jobs once now
 ```
+
+**The scheduler container** runs `manage.py run_scheduled_jobs --loop
+--interval 60`: every minute it sends due follow-up reminders, hands chats
+that no human picked up back to the AI, and once a day takes the database
+backup. It uses the same image as `web` (deploy.sh rebuilds it once for both),
+starts only after `web` is healthy, and has `SKIP_BOOT_TASKS=1` so it never
+runs migrations or `collectstatic` — only `web` does. Quiet minutes print
+nothing; anything that sent, resumed, saved or failed prints one line.
 
 **Deploying an update** — migrations and `collectstatic` run automatically on
 every boot, so this is the whole procedure:
@@ -394,21 +436,77 @@ git pull
 docker compose up -d --build
 ```
 
-**Back up the database** (SQLite in WAL mode must be copied with `.backup`, not
-`cp`, or you can capture a torn file):
+### Backups
 
-```bash
-docker compose exec web python -c \
-  "import sqlite3; s=sqlite3.connect('/app/data/db.sqlite3'); \
-   d=sqlite3.connect('/app/data/backup.sqlite3'); s.backup(d); d.close(); s.close()"
-docker compose cp web:/app/data/backup.sqlite3 ./backup-$(date +%F).sqlite3
+The scheduler takes an online SQLite backup every night (the first run at or
+after `BACKUP_HOUR`, default 03:00 in `TIME_ZONE`) into the database volume:
+
+```
+/app/data/backups/db-2026-10-07.sqlite3
+/app/data/backups/db-2026-10-08.sqlite3
+...
 ```
 
-Worth a nightly cron on the host:
+It keeps the newest `BACKUP_KEEP_DAYS` (default 14) and deletes older dated
+files; anything else you put in that folder is left alone. A `.last-backup`
+marker records the day, so a restart never takes a second copy that day. It
+uses SQLite's backup API, which is safe while the site is writing (a plain
+`cp` of a WAL database can capture a torn file). Check it:
 
 ```bash
-0 3 * * * cd /opt/scared-travel-ai && docker compose exec -T web python -c "import sqlite3; s=sqlite3.connect('/app/data/db.sqlite3'); d=sqlite3.connect('/app/data/backup.sqlite3'); s.backup(d); d.close(); s.close()" && docker compose cp web:/app/data/backup.sqlite3 /root/backups/db-$(date +\%F).sqlite3
+docker compose exec web ls -lh /app/data/backups
+docker compose logs scheduler | grep -i backed
 ```
+
+Take one right now (for example before a risky change):
+
+```bash
+docker compose exec scheduler python -c "import django; django.setup(); \
+from core.backups import run_nightly_backup; print(run_nightly_backup(force=True))"
+```
+
+**Copy backups off the server.** They live on the same disk as the database,
+so they protect against mistakes, not against losing the VPS. Pull them
+somewhere else regularly — from your laptop:
+
+```bash
+# one file
+ssh root@153.92.210.143 'cd /opt/scared-travel-ai && \
+  docker compose cp web:/app/data/backups/db-2026-10-07.sqlite3 /tmp/' && \
+  scp root@153.92.210.143:/tmp/db-2026-10-07.sqlite3 ./
+
+# or everything, via the volume's folder on the host
+ssh root@153.92.210.143 'docker volume inspect -f "{{ .Mountpoint }}" \
+  scared-travel-ai_sqlite_data'      # e.g. /var/lib/docker/volumes/…/_data
+rsync -av root@153.92.210.143:/var/lib/docker/volumes/scared-travel-ai_sqlite_data/_data/backups/ ./backups/
+```
+
+(The volume name is `<project>_sqlite_data`; the project is the folder name,
+`scared-travel-ai`, unless `COMPOSE_PROJECT_NAME` says otherwise.) A host cron
+running that `rsync` from another machine, or `rclone` to S3/Google Drive, gives
+you an off-site copy.
+
+**Restore a backup.**
+
+```bash
+cd /opt/scared-travel-ai
+# 1. stop everything that writes to the database
+docker compose stop web scheduler
+# 2. keep the current file, just in case, then put the backup in its place
+docker compose run --rm --no-deps -e SKIP_BOOT_TASKS=1 web sh -c '
+  cd /app/data &&
+  mv db.sqlite3 db.sqlite3.before-restore &&
+  rm -f db.sqlite3-wal db.sqlite3-shm &&
+  cp backups/db-2026-10-07.sqlite3 db.sqlite3'
+# 3. start again (web applies any newer migrations on boot)
+docker compose up -d
+```
+
+To restore a file you copied off the server, put it in place first with
+`docker compose cp ./db-2026-10-07.sqlite3 web:/app/data/backups/` (while `web`
+is still running), then follow the steps above. Removing the `-wal`/`-shm`
+files matters: they belong to the old database and would be replayed on top of
+the restored one.
 
 ---
 
@@ -473,6 +571,9 @@ automatic templating, the compose file invokes the envsubst script explicitly.
 | certbot: *challenge failed* | DNS not resolving to the VPS yet, or port 80 blocked by `ufw` / hPanel firewall |
 | nginx: *cannot load certificate* | `./docker/init-letsencrypt.sh` has not been run, or `DOMAIN` disagrees with the issued certificate |
 | `database is locked` | More gunicorn workers than the volume can take — lower `--workers` |
+| No emails arrive | `EMAIL_HOST` unset (mail is only printed to the logs), wrong credentials (`docker compose logs web \| grep core.emails`), or missing SPF/DKIM so it lands in spam. Test with `manage.py sendtestemail` |
+| Email links point at `localhost` | `SITE_URL` not set in `.env` |
+| Follow-up reminders never fire | `scheduler` not running — `docker compose ps scheduler`, `docker compose logs scheduler` |
 | Redirect loop | `USE_X_FORWARDED_PROTO` not `True` while nginx terminates TLS |
 | CD fails at *Run deploy script* | `VPS_SSH_KEY` truncated (must include the BEGIN/END lines), wrong `VPS_USER`, or the key not in the VPS's `authorized_keys` |
 | CD fails at `git fetch` | Private repo without a deploy key on the VPS, or the remote still on HTTPS |

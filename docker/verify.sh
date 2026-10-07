@@ -75,7 +75,7 @@ esac
 # ------------------------------------------------------------ containers ----
 head_ "2. Containers"
 
-for svc in web nginx certbot; do
+for svc in web scheduler nginx certbot; do
     cid="$(dc ps -q "$svc" 2>/dev/null)"
     if [ -z "$cid" ]; then
         bad "$svc is not running"
@@ -132,6 +132,10 @@ sfiles="$(dc exec -T web sh -c 'find /app/staticfiles -type f 2>/dev/null | wc -
 dbsize="$(dc exec -T web sh -c 'du -h /app/data/db.sqlite3 2>/dev/null | cut -f1' | tr -d '\r ')"
 [ -n "$dbsize" ] && ok "database present on the volume ($dbsize)" \
                  || warn "no db.sqlite3 on the volume — is DATABASE_URL using data/ ?"
+
+latest="$(dc exec -T web sh -c 'ls -1 /app/data/backups/db-*.sqlite3 2>/dev/null | tail -1' | tr -d '\r')"
+[ -n "$latest" ] && ok "latest nightly backup: $(basename "$latest")" \
+                 || warn "no nightly backup yet in /app/data/backups (the scheduler takes one after BACKUP_HOUR)"
 
 fi
 

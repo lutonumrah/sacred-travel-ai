@@ -129,8 +129,9 @@ page; the agent is notified.
 Under **AI Settings**, *handoff wait* and *agent idle* timers (minutes, 0 = never)
 let the AI take a chat back when nobody picks up a handoff, or when the agent
 leaves the customer unanswered. They are checked whenever the customer writes or
-the widget polls; `conversations.services.auto_resume_stale_conversations()` does
-the same sweep for a scheduler.
+the widget polls, and the scheduler sweeps every minute
+(`conversations.services.auto_resume_stale_conversations()`) so a chat the
+customer has gone quiet on is handed back too.
 
 ### 4. The CRM works the lead
 
@@ -140,7 +141,10 @@ change, assignment and note is written to an activity timeline.
 
 Each lead carries a 0–100 **score** — points for reachable contact details,
 known dates, a stated budget and pipeline position — so the pipeline sorts
-itself. Follow-up tasks bucket into overdue / today / upcoming with reminders.
+itself. Follow-up tasks bucket into overdue / today / upcoming. When a task's
+reminder time (or, without one, its due time) passes, the scheduler reminds the
+assignee — or the lead's owner, or the managers if nobody owns it — once, in
+the app and by email.
 
 Employees only see leads assigned to them or unassigned; managers and admins
 see everything.
@@ -174,6 +178,23 @@ Razorpay's retries cannot double-apply an event.
 locally with the same shape and the same signature scheme, and a *"Complete
 simulated payment"* button on the booking page exercises the real verification
 path. Configure keys and the same code goes live.
+
+**Customer emails.** When a booking is raised — by the customer in the chat or
+by staff — the customer gets *"Your booking … — complete your payment"* with
+the summary and their `/pay/<token>/` link; then *Booking confirmed* (with the
+Razorpay payment reference) once paid, and a short notice on cancellation or
+refund. Staff can re-issue a link and email it from the booking page. Every
+send is listed under *Customer emails* on the booking, in the lead timeline and
+in the audit log. Emails carry the website's brand name; a mail failure is
+logged and never blocks the booking or payment.
+
+**Notifications and email.** Leads, handoffs, payments and follow-up reminders raise in-app notifications
+(the bell). Staff with **Email notifications** ticked (default on; each user
+changes it under *My account*, admins on the user form) also get them by
+email. Two kinds stay in-app only because they are frequent: each new customer
+message in a chat a human is handling, and routine pipeline moves of a lead
+assigned to you (closing a lead as Converted/Lost is still emailed to
+managers). Forgotten passwords are reset from the login page by email.
 
 ### 7. Reporting
 
@@ -266,6 +287,11 @@ All settings come from `.env` (see `.env.example`).
 | `THROTTLE_WIDGET_CHAT` / `_POLL` / `_BOOK`, `THROTTLE_PUBLIC_PAY` | Per-IP limits: `30/minute`, `120/minute`, `20/hour`, `60/hour` |
 | `NUM_PROXIES` | `1` (nginx in front). Set `0` when nothing sits in front of gunicorn, or clients could dodge rate limits with a forged `X-Forwarded-For` |
 | `DATABASE_URL` | SQLite; set a `postgres://` URL for Postgres |
+| `SITE_URL` | Base of links in emails; defaults to `http://localhost:8000` — set it in production |
+| `EMAIL_HOST` (+ `EMAIL_PORT`, `EMAIL_HOST_USER`, `EMAIL_HOST_PASSWORD`, `EMAIL_USE_TLS` / `EMAIL_USE_SSL`, `EMAIL_TIMEOUT`) | Emails are printed to the log (console backend) instead of sent. `EMAIL_BACKEND` overrides the choice |
+| `DEFAULT_FROM_EMAIL` / `SERVER_EMAIL` | `Scared Travel <no-reply@localhost>` |
+| `BACKUP_HOUR` / `BACKUP_KEEP_DAYS` / `BACKUP_ENABLED` / `BACKUP_DIR` | Nightly backup after 03:00, newest 14 kept, on, `backups/` beside the database |
+| `LOG_LEVEL` | `INFO` |
 
 Before deploying: set `DEBUG=False`, a real `SECRET_KEY` and `ALLOWED_HOSTS`,
 run `collectstatic`, and serve through `gunicorn config.wsgi`.
@@ -281,9 +307,12 @@ docker compose build
 docker compose up -d
 ```
 
-Three containers: gunicorn, nginx (TLS + `/static` + `/media`) and certbot for
-automatic renewal. Migrations and `collectstatic` run on every boot, so
-deploying an update is `git pull && docker compose up -d --build`.
+Four containers: gunicorn, a scheduler (`manage.py run_scheduled_jobs --loop`:
+follow-up reminders, chat auto-resume and a nightly SQLite backup to
+`/app/data/backups`), nginx (TLS + `/static` + `/media`) and certbot for
+automatic renewal. Migrations and `collectstatic` run when `web` boots (the
+scheduler skips them via `SKIP_BOOT_TASKS=1`), so deploying an update is
+`git pull && docker compose up -d --build`.
 
 Pushing to `master` deploys automatically: the GitHub Actions workflow in
 [.github/workflows/deploy.yml](.github/workflows/deploy.yml) runs the tests,
@@ -301,8 +330,9 @@ Full VPS walkthrough — DNS, firewall, CD secrets, backups, troubleshooting —
 python manage.py test
 ```
 
-155+ tests covering requirement extraction, the Claude layer and each of its
+340+ tests covering requirement extraction, the Claude layer and each of its
 fallbacks (stubbed — no network), lead capture and deduplication, handoff,
 pipeline transitions, scoring, role-based visibility, inventory search and
-visibility rules, payment signature verification, webhook idempotency, and the
-API envelope.
+visibility rules, payment signature verification, webhook idempotency, the
+API envelope, customer and staff emails (locmem backend), password reset,
+follow-up reminders, the scheduler and the nightly backup.

@@ -21,6 +21,9 @@ log() { printf '\n==> %s\n' "$*"; }
 # Bring the stack up and wait for the web container to report healthy.
 # Returns non-zero if it never does.
 roll() {
+    # Only web has a build section; the scheduler runs the same image tag, and
+    # `up` recreates it whenever that tag points at a new image. It waits for
+    # web to report healthy (migrations done) before starting.
     docker compose build web
     docker compose up -d --remove-orphans
 
@@ -74,8 +77,26 @@ git reset --hard "$TARGET"
 log "Deploying $TARGET"
 git --no-pager log -1 --pretty='  %h  %s  (%an)'
 
+# The scheduler is not part of the health gate (the site works without it),
+# but say loudly if it did not come up.
+scheduler_state() {
+    local cid
+    cid="$(docker compose ps -q scheduler 2>/dev/null || true)"
+    if [ -z "$cid" ]; then
+        echo "not running"
+        return
+    fi
+    docker inspect -f '{{.State.Status}}' "$cid" 2>/dev/null || echo "unknown"
+}
+
 if roll; then
     log "Healthy. Deployed $(git rev-parse --short HEAD)"
+    state="$(scheduler_state)"
+    if [ "$state" = "running" ]; then
+        log "Scheduler running"
+    else
+        log "WARNING: scheduler is $state — check: docker compose logs scheduler"
+    fi
     docker image prune -f >/dev/null 2>&1 || true
     exit 0
 fi

@@ -168,6 +168,9 @@ class FollowUpTask(TimeStampedModel):
     is_completed = models.BooleanField(default=False)
     completed_at = models.DateTimeField(null=True, blank=True)
     notes = models.TextField(blank=True)
+    # Set when the scheduler's reminder fires (crm.services.send_due_reminders),
+    # so each task is reminded exactly once.
+    reminded_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         ordering = ["due_at"]
